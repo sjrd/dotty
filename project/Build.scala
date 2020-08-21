@@ -526,14 +526,12 @@ object Build {
           (sourceManaged in Compile).value
         }
         val externalDeps = externalCompilerClasspathTask.value
-        val externalJSDeps = (externalDependencyClasspath in (LocalProject("dotty-library-bootstrappedJS"), Compile)).value
         val jars = packageAll.value
 
         Seq(
           "-Ddotty.tests.dottyCompilerManagedSources=" + managedSrcDir,
           "-Ddotty.tests.classes.dottyInterfaces=" + jars("dotty-interfaces"),
           "-Ddotty.tests.classes.dottyLibrary=" + jars("dotty-library"),
-          "-Ddotty.tests.classes.dottyLibraryJS=" + jars("dotty-library-js"),
           "-Ddotty.tests.classes.dottyCompiler=" + jars("dotty-compiler"),
           "-Ddotty.tests.classes.tastyCore=" + jars("tasty-core"),
           "-Ddotty.tests.classes.compilerInterface=" + findArtifactPath(externalDeps, "compiler-interface"),
@@ -541,7 +539,6 @@ object Build {
           "-Ddotty.tests.classes.scalaAsm=" + findArtifactPath(externalDeps, "scala-asm"),
           "-Ddotty.tests.classes.jlineTerminal=" + findArtifactPath(externalDeps, "jline-terminal"),
           "-Ddotty.tests.classes.jlineReader=" + findArtifactPath(externalDeps, "jline-reader"),
-          "-Ddotty.tests.classes.scalaJSLibrary=" + findArtifactPath(externalJSDeps, "scalajs-library_2.13"),
         )
       },
 
@@ -708,8 +705,7 @@ object Build {
           // running the compiler, we should always have the bootstrapped
           // library on the compiler classpath since the non-bootstrapped one
           // may not be binary-compatible.
-          "dotty-library"       -> packageBin.in(`dotty-library-bootstrapped`, Compile).value,
-          "dotty-library-js"    -> packageBin.in(`dotty-library-bootstrappedJS`, Compile).value,
+          "dotty-library"       -> packageBin.in(`dotty-library-bootstrapped`, Compile).value
         ).mapValues(_.getAbsolutePath)
       }
     }.value,
@@ -1142,6 +1138,27 @@ object Build {
             )).get
         )
       }
+    )
+
+  lazy val sjsCompilerTests = project.in(file("tests/sjs-compiler-tests")).
+    dependsOn(`dotty-compiler` % "test->test").
+    settings(
+      commonNonBootstrappedSettings,
+      outputStrategy := Some(StdoutOutput),
+
+      // Change the baseDirectory when running the tests
+      baseDirectory in Test := baseDirectory.value.getParentFile.getParentFile,
+
+      javaOptions ++= (javaOptions in `dotty-compiler`).value,
+      javaOptions ++= {
+        val externalJSDeps = (externalDependencyClasspath in (`dotty-library-bootstrappedJS`, Compile)).value
+        val dottyLibraryJSJar = (packageBin in (`dotty-library-bootstrappedJS`, Compile)).value.getAbsolutePath
+
+        Seq(
+          "-Ddotty.tests.classes.dottyLibraryJS=" + dottyLibraryJSJar,
+          "-Ddotty.tests.classes.scalaJSLibrary=" + findArtifactPath(externalJSDeps, "scalajs-library_2.13"),
+        )
+      },
     )
 
   lazy val `dotty-bench` = project.in(file("bench")).asDottyBench(NonBootstrapped)
