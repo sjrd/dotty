@@ -87,9 +87,9 @@ class VarianceChecker(using Context) {
     def relativeVariance(tvar: Symbol, base: Symbol, v: Variance = Covariant): Variance = /*trace(i"relative variance of $tvar wrt $base, so far: $v")*/
       if base == tvar.owner then
         v
-      else if base.is(Param) && base.owner.isTerm && !base.owner.isAllOf(PrivateLocal) then
+      else if base.is(Param) && base.isLocalToBlock && !base.owner.isAllOf(PrivateLocal) then
         relativeVariance(tvar, paramOuter(base.owner), flip(v))
-      else if base.owner.isTerm || base.owner.is(Package) || base.isAllOf(PrivateLocal) then
+      else if base.isLocalToBlock || base.owner.is(Package) || base.isAllOf(PrivateLocal) then
         Bivariant
       else if base.isAliasType then
         relativeVariance(tvar, base.owner, Invariant)

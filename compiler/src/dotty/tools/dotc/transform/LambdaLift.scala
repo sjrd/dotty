@@ -122,7 +122,7 @@ object LambdaLift {
      *           the owner of `sym`, the largest such trait.
      *           Otherwise, NoSymbol.
      *
-     *  @pre sym.owner.isTerm, (enclosure.isMethod || enclosure.isClass)
+     *  @pre sym.isLocalToBlock, (enclosure.isMethod || enclosure.isClass)
      *
      *  The idea of `markFree` is illustrated with an example:
      *
@@ -222,7 +222,7 @@ object LambdaLift {
           case tree: This =>
             narrowTo(tree.symbol.asClass)
           case tree: DefDef =>
-            if (sym.owner.isTerm)
+            if (sym.isLocalToBlock)
               liftedOwner(sym) = sym.enclosingPackageClass
                 // this will make methods in supercall constructors of top-level classes owned
                 // by the enclosing package, which means they will be static.
@@ -242,7 +242,7 @@ object LambdaLift {
               }
             }
           case tree: TypeDef =>
-            if (sym.owner.isTerm) liftedOwner(sym) = sym.topLevelClass.owner
+            if (sym.isLocalToBlock) liftedOwner(sym) = sym.topLevelClass.owner
           case tree: Template =>
             liftedDefs(tree.symbol.owner) = new mutable.ListBuffer
           case _ =>
@@ -424,7 +424,7 @@ object LambdaLift {
 
     def proxyRef(sym: Symbol)(using Context): Tree = {
       val psym = atPhase(thisPhase)(proxy(sym))
-      thisPhase.transformFollowingDeep(if (psym.owner.isTerm) ref(psym) else memberRef(psym))
+      thisPhase.transformFollowingDeep(if (psym.isLocalToBlock) ref(psym) else memberRef(psym))
     }
 
     def addFreeArgs(sym: Symbol, args: List[Tree])(using Context): List[Tree] =

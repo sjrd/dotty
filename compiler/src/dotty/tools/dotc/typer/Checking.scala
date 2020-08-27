@@ -1085,7 +1085,7 @@ trait Checking {
   def checkEnum(cdef: untpd.TypeDef, cls: Symbol, firstParent: Symbol)(using Context): Unit = {
     def isEnumAnonCls =
       cls.isAnonymousClass
-      && cls.owner.isTerm
+      && cls.isLocalToBlock
       && (cls.owner.flagsUNSAFE.isAllOf(EnumCase)
         || ((cls.owner.name eq nme.DOLLAR_NEW) && cls.owner.flagsUNSAFE.isAllOf(Private | Synthetic)))
     if (!isEnumAnonCls)

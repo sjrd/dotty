@@ -58,7 +58,7 @@ class CapturedVars extends MiniPhase with IdentityDenotTransformer { thisPhase =
     def traverse(tree: Tree)(using Context) = tree match {
       case id: Ident =>
         val sym = id.symbol
-        if (sym.is(Mutable, butNot = Method) && sym.owner.isTerm) {
+        if (sym.is(Mutable, butNot = Method) && sym.isLocalToBlock) {
           val enclMeth = ctx.owner.enclosingMethod
           if (sym.enclosingMethod != enclMeth) {
             report.log(i"capturing $sym in ${sym.enclosingMethod}, referenced from $enclMeth")

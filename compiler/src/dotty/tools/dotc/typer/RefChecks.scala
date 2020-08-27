@@ -927,7 +927,7 @@ object RefChecks {
     var refSym: Symbol = _
 
     override def enterReference(sym: Symbol, span: Span): Unit =
-      if (sym.exists && sym.owner.isTerm)
+      if (sym.exists && sym.isLocalToBlock)
         levelAndIndex.get(sym) match {
           case Some((level, idx)) if (level.maxIndex < idx) =>
             level.maxIndex = idx
@@ -1063,7 +1063,7 @@ class RefChecks extends MiniPhase { thisPhase =>
     checkNoPrivateOverrides(tree)
     checkDeprecatedOvers(tree)
     val sym = tree.symbol
-    if (sym.exists && sym.owner.isTerm) {
+    if (sym.exists && sym.isLocalToBlock) {
       tree.rhs match {
         case Ident(nme.WILDCARD) => report.error(UnboundPlaceholderParameter(), sym.srcPos)
         case _ =>

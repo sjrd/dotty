@@ -956,7 +956,7 @@ class RefinedPrinter(_ctx: Context) extends PlainPrinter(_ctx) {
   /** String representation of symbol's definition keyword */
   override protected def keyString(sym: Symbol): String = {
     val flags = sym.flagsUNSAFE
-    if (sym.isType && sym.owner.isTerm) ""
+    if (sym.isType && sym.isLocalToBlock) ""
     else if (sym.isPackageObject) "package object"
     else if (flags.is(Module) && flags.is(Case)) "case object"
     else if (sym.isClass && flags.is(Case)) "case class"

@@ -1548,7 +1548,7 @@ import ast.tpd
 
   class ValueClassesMayNotBeContainted(valueClass: Symbol)(using Context)
     extends SyntaxMsg(ValueClassesMayNotBeContaintedID) {
-    private def localOrMember = if (valueClass.owner.isTerm) "local class" else "member of another class"
+    private def localOrMember = if (valueClass.isLocalToBlock) "local class" else "member of another class"
     def msg = s"""Value classes may not be a $localOrMember"""
     def explain = ""
   }

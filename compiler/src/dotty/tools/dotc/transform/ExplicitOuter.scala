@@ -217,7 +217,7 @@ object ExplicitOuter {
   private def hasLocalInstantiation(cls: ClassSymbol)(using Context): Boolean =
     // Modules are normally locally instantiated, except if they are declared in a trait,
     // in which case they will be instantiated in the classes that mix in the trait.
-    cls.owner.isTerm || cls.is(Private, butNot = Module) || (cls.is(Module) && !cls.owner.is(Trait))
+    cls.isLocalToBlock || cls.is(Private, butNot = Module) || (cls.is(Module) && !cls.owner.is(Trait))
 
   /** The outer parameter accessor of cass `cls` */
   private def outerParamAccessor(cls: ClassSymbol)(using Context): TermSymbol =
@@ -280,7 +280,7 @@ object ExplicitOuter {
         val newCls = nw.tpe.classSymbol
         isOuterSym(newCls.owner.enclosingClass) ||
         hasOuterPrefix(nw.tpe) ||
-        newCls.owner.isTerm && cls.isProperlyContainedIn(newCls)
+        newCls.isLocalToBlock && cls.isProperlyContainedIn(newCls)
           // newCls might get proxies for free variables. If current class is
           // properly contained in newCls, it needs an outer path to newCls access the
           // proxies and forward them to the new instance.

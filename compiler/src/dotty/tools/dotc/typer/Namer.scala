@@ -1272,7 +1272,7 @@ class Namer { typer: Typer =>
        *  NoType if neither case holds.
        */
       val inherited =
-        if (sym.owner.isTerm) NoType
+        if (sym.isLocalToBlock) NoType
         else {
           // TODO: Look only at member of supertype instead?
           lazy val schema = paramFn(WildcardType)

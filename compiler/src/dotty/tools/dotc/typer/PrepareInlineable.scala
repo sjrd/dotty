@@ -188,7 +188,7 @@ object PrepareInlineable {
      */
     def makeInlineable(tree: Tree)(using Context): Tree = {
       val inlineSym = ctx.owner
-      if (inlineSym.owner.isTerm)
+      if (inlineSym.isLocalToBlock)
         // Inlineable methods in local scopes can only be called in the scope they are defined,
         // so no accessors are needed for them.
         tree

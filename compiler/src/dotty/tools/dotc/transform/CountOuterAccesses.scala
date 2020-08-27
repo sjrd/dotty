@@ -23,7 +23,7 @@ object CountOuterAccesses:
   def mightBeDropped(sym: Symbol)(using Context) =
     def isLocal(cls: Symbol) =
       cls.isAnonymousClass
-      || cls.owner.isTerm
+      || cls.isLocalToBlock
       || cls.accessBoundary(defn.RootClass).isContainedIn(cls.topLevelClass)
     (sym.is(OuterAccessor) || sym.isOuterParamAccessor) && isLocal(sym.owner)
 
