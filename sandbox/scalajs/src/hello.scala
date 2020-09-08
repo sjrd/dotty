@@ -1,15 +1,17 @@
 package hello
 
 import scala.scalajs.js
+import scala.scalajs.js.annotation._
 
-trait MyTrait {
-  val x = 5
-  def foo(y: Int) = x
+class Foo(val x: Int) extends js.Object {
+  def bar(y: Int): Int = x + y
 }
 
-object HelloWorld extends MyTrait {
+object HelloWorld {
   def main(args: Array[String]): Unit = {
     println("hello dotty.js!")
-    println(foo(4))
+    val obj = new Foo(5)
+    println(obj.x)
+    println(obj.bar(6))
   }
 }

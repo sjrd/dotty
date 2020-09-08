@@ -71,6 +71,10 @@ object JSInteropUtils {
     def isJSSetter(using Context): Boolean =
       sym.originalName.isSetterName && sym.is(Method)
 
+    /** Is this symbol a JS getter or setter? */
+    def isJSProperty(using Context): Boolean =
+      sym.isJSGetter || sym.isJSSetter
+
     /** Should this symbol be translated into a JS bracket access? */
     def isJSBracketAccess(using Context): Boolean =
       sym.hasAnnotation(jsdefn.JSBracketAccessAnnot)
