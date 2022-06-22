@@ -1,15 +1,18 @@
 package hello
 
-import scala.scalajs.js
+import scala.annotation.static
 
-trait MyTrait {
-  val x = 5
-  def foo(y: Int) = x
-}
+class Invoker
 
-object HelloWorld extends MyTrait {
+object Invoker:
+  @static val x: String = "hello"
+  @static def f(): String = x
+
+object HelloWorld {
   def main(args: Array[String]): Unit = {
-    println("hello dotty.js!")
-    println(foo(4))
+    val x = Invoker.x
+    println(x)
+    val y = Invoker.f()
+    println(y)
   }
 }

@@ -857,7 +857,7 @@ class JSCodeGen()(using genCtx: Context) {
       val isJavaStatic = f.is(JavaStatic)
       assert(!(isTopLevelExport && isJavaStatic),
           em"found ${f.fullName} which is both a top-level export and a Java static")
-      val isStaticField = isTopLevelExport || isJavaStatic
+      val isStaticField = isTopLevelExport || isJavaStatic || f.isScalaStatic
 
       val namespace = if isStaticField then js.MemberNamespace.PublicStatic else js.MemberNamespace.Public
       val mutable = isStaticField || f.is(Mutable)
@@ -1518,7 +1518,8 @@ class JSCodeGen()(using genCtx: Context) {
                 optimizerHints, None)
           } else {
             val namespace = if (isMethodStaticInIR(sym)) {
-              if (sym.isPrivate) js.MemberNamespace.PrivateStatic
+              if (methodName.name.isClassInitializer) js.MemberNamespace.StaticConstructor
+              else if (sym.isPrivate) js.MemberNamespace.PrivateStatic
               else js.MemberNamespace.PublicStatic
             } else {
               if (sym.isPrivate) js.MemberNamespace.Private
@@ -1559,6 +1560,7 @@ class JSCodeGen()(using genCtx: Context) {
 
     if (namespace.isStatic || !currentClassSym.isNonNativeJSClass) {
       val flags = js.MemberFlags.empty.withNamespace(namespace)
+      System.err.println(s"$namespace -- $methodName")
       js.MethodDef(flags, methodName, originalName, jsParams, resultIRType, Some(genBody()))(
             optimizerHints, None)
     } else {
@@ -1774,8 +1776,10 @@ class JSCodeGen()(using genCtx: Context) {
           assert(!sym.is(Package), "Cannot use package as value: " + tree)
           genLoadModule(sym)
         } else if (sym.is(JavaStatic)) {
+          System.err.println(s"JavaStatic Select: $tree")
           genLoadStaticField(sym)
         } else {
+          System.err.println(s"$qualifier . $sym (${sym.flags.flagsString}")
           val (field, boxed) = genAssignableField(sym, qualifier)
           if (boxed) unbox(field, atPhase(elimErasedValueTypePhase)(sym.info))
           else field
@@ -4277,7 +4281,7 @@ class JSCodeGen()(using genCtx: Context) {
           (ftpe, false)
 
       val f =
-        if sym.is(JavaStatic) then
+        if sym.is(JavaStatic) || sym.isScalaStatic then
           js.SelectStatic(className, fieldIdent)(irType)
         else
           js.Select(qual, className, fieldIdent)(irType)
@@ -4577,7 +4581,7 @@ class JSCodeGen()(using genCtx: Context) {
   }
 
   private def isMethodStaticInIR(sym: Symbol): Boolean =
-    sym.is(JavaStatic)
+    sym.isScalaStatic || sym.is(JavaStatic)
 
   /** Generate a Class[_] value (e.g. coming from classOf[T]) */
   private def genClassConstant(tpe: Type)(implicit pos: Position): js.Tree =
