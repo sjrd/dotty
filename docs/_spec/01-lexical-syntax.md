@@ -29,13 +29,10 @@ The lexical analyzer inserts `indent` and `outdent` tokens that represent region
 
 ´\color{red}{\text{TODO SCALA3: Port soft-modifier.md and link it here.}}´
 
-In the context-free productions below we use the notation `<<< ts >>>`
-to indicate a token sequence `ts` that is either enclosed in a pair of braces `{ ts }` or that constitutes an indented region `indent ts outdent`. Analogously, the
-notation `:<<< ts >>>` indicates a token sequence `ts` that is either enclosed in a pair of braces `{ ts }` or that constitutes an indented region `indent ts outdent` that follows
-a `colon` token.
+In the context-free productions below we use the notation `<<< ts >>>` to indicate a token sequence `ts` that is either enclosed in a pair of braces `{ ts }` or that constitutes an indented region `indent ts outdent`.
+Analogously, the notation `:<<< ts >>>` indicates a token sequence `ts` that is either enclosed in a pair of braces `{ ts }` or that constitutes an indented region `indent ts outdent` that follows a `colon` token.
 
-A `colon` token reads as the standard colon "`:`" but is generated instead of it where `colon` is legal according to the context free syntax, but only if the previous token
-is an alphanumeric identifier, a backticked identifier, or one of the tokens `this`, `super`, `new`, "`)`", and "`]`".
+A `colon` token reads as the standard colon "`:`" but is generated instead of it where `colon` is legal according to the context free syntax, but only if the previous token is an alphanumeric identifier, a backticked identifier, or one of the tokens `this`, `super`, `new`, "`)`", and "`]`".
 
 ```
 colon         ::=  ':'    -- with side conditions explained above
