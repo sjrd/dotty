@@ -8,9 +8,12 @@ chapter: 3
 
 ```ebnf
   Type              ::=  FunctionArgTypes ‘=>’ Type
+                      |  TypeLambdaParams ‘=>>’ Type
                       |  InfixType
   FunctionArgTypes  ::=  InfixType
                       |  ‘(’ [ ParamType {‘,’ ParamType } ] ‘)’
+  TypeLambdaParams  ::=  ‘[’ TypeLambdaParam {‘,’ TypeLambdaParam} ‘]’
+  TypeLambdaParam   ::=  {Annotation} (id | ‘_’) [TypeParamClause] [‘>:’ Type] [‘<:’ Type]
   InfixType         ::=  CompoundType {id [nl] CompoundType}
   CompoundType      ::=  AnnotType {‘with’ AnnotType} [Refinement]
                       |  Refinement
@@ -492,10 +495,10 @@ union : [A >: Nothing <: Comparable[A]] (x: Set[A], xs: Set[A]) Set[A]
 ### Type Constructors
 
 ```
-Type            ::=  ... |  HkTypeParamClause ‘=>>’ Type
-TypeParamClause ::=  ‘[’ TypeParam {‘,’ TypeParam} ‘]’
-TypeParam       ::=  {Annotation} (id [HkTypeParamClause] | ‘_’) TypeBounds
-TypeBounds      ::=  [‘>:’ Type] [‘<:’ Type]
+Type             ::=  ... |  TypeLambdaParams ‘=>>’ Type
+TypeParamClause  ::=  ‘[’ TypeParam {‘,’ TypeParam} ‘]’
+TypeLambdaParams ::=  ‘[’ TypeLambdaParam {‘,’ TypeLambdaParam} ‘]’
+TypeLambdaParam  ::=  {Annotation} (id | ‘_’) [TypeParamClause] [‘>:’ Type] [‘<:’ Type]
 ```
 
 <!-- the definition of a parameterized type above uses the concept of a type constructor, so we can't define a type constructor as an unapplied parameterized type. -->
