@@ -186,7 +186,7 @@ A member definition ´M´ _matches_ a member definition ´M'´, if ´M´ and ´M
 
 1. Neither ´M´ nor ´M'´ is a method definition.
 2. ´M´ and ´M'´ define both monomorphic methods with equivalent argument types.
-3. ´M´ is defined in Java and defines a parameterless method and ´M'´ defines a method with an empty parameter list `()`, or ´M´ is defined in Java and defines a method with an empty parameter list `()` and ´M'´ defines a parameterless method.
+3. ´M´ is defined in Java and defines a method with an empty parameter list `()` and ´M'´ defines a parameterless method.
 4. ´M´ and ´M'´ define both polymorphic methods with equal number of argument types ´\overline T´, ´\overline T'´ and equal numbers of type parameters ´\overline t´, ´\overline t'´, say, and  ´\overline T' = [\overline t'/\overline t]\overline T´.
 
 <!--
