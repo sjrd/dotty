@@ -434,8 +434,7 @@ Their expansion is then the expansion in the equivalent parameterized type.
 
 ## Non-Value Types
 
-The types explained in the following do not denote sets of values, nor do they appear explicitly in programs.
-They are introduced in this report as the internal types of defined identifiers.
+The types explained in the following do not denote sets of values.
 
 ### Method Types
 
@@ -492,20 +491,76 @@ union : [A >: Nothing <: Comparable[A]] (x: Set[A], xs: Set[A]) Set[A]
 
 ### Type Constructors
 
-A _type constructor_ is represented internally much like a polymorphic method type.
-`[´\pm´ ´a_1´ >: ´L_1´ <: ´U_1, ..., \pm a_n´ >: ´L_n´ <: ´U_n´] ´T´` represents a type that is expected by a [type constructor parameter](04-basic-declarations-and-definitions.html#type-parameters) or an [abstract type constructor binding](04-basic-declarations-and-definitions.html#type-declarations-and-type-aliases) with the corresponding type parameter clause.
-
-###### Example
-
-Consider this fragment of the `Iterable[+X]` class:
-
-```scala
-trait Iterable[+X] {
-  def flatMap[newType[+X] <: Iterable[X], S](f: X => newType[S]): newType[S]
-}
+```
+Type            ::=  ... |  HkTypeParamClause ‘=>>’ Type
+TypeParamClause ::=  ‘[’ TypeParam {‘,’ TypeParam} ‘]’
+TypeParam       ::=  {Annotation} (id [HkTypeParamClause] | ‘_’) TypeBounds
+TypeBounds      ::=  [‘>:’ Type] [‘<:’ Type]
 ```
 
-Conceptually, the type constructor `Iterable` is a name for the anonymous type `[+X] Iterable[X]`, which may be passed to the `newType` type constructor parameter in `flatMap`.
+<!-- the definition of a parameterized type above uses the concept of a type constructor, so we can't define a type constructor as an unapplied parameterized type. -->
+
+A _type constructor_ is either:
+- a _type lambda_, of the form `[´\mathit{tps}\,´] =>> ´T´` where `[´\mathit{tps}\,´]` is a type parameter clause `[´a_1´ >: ´L_1´ <: ´U_1, ..., a_n´ >: ´L_n´ <: ´U_n´]` for some ´n \gt 0´ and ´T´ is either a value type
+or another type lambda.
+- a reference to an unparameterized [type declaration](04-basic-declarations-and-definitions.html#type-declarations-and-type-aliases) upper-bounded by a type lambda.
+- A reference to a parameterized type declaration.
+- A reference to a [polymorphic class](05-classes-and-objects.html##class-definitions).
+
+Each type parameter ´a_i´ of a type lambda has a variance ´v_i´ which cannot be written down by the user but is inferred from the body of the type lambda to maximize the number of types that conform to the type lambda.
+<!-- TODO: write down the exact algorithm? -->
+
+#### Desugaring of parameterized type declarations
+A parameterized type declaration is desugared into an unparameterized type declaration
+whose bounds are type lambdas with explicit variance annotations.
+
+##### Abstract Type
+An abstract type
+```scala
+type ´t´[´\mathit{tps}\,´] >: ´L´ <: ´U´
+```
+is desugared into an unparameterized abstract type as follow:
+- If `L` conforms to `Nothing`, then,
+
+  ```scala
+type ´t´ >: Nothing
+       <: [´\mathit{tps'}\,´] =>> ´U´
+  ```
+- otherwise,
+
+  ```scala
+type ´t´ >: [´\mathit{tps'}\,´] =>> ´L´
+       <: [´\mathit{tps'}\,´] =>> ´U´
+  ```
+  
+If at least one of the ´\mathit{tps}´ contains an explicit variance annotation, then ´\mathit{tps'} = \mathit{tps}´, otherwise we infer the variance of each type parameter as with the user-written type lambda `[´\mathit{tps}\,´] =>> ´U´`.
+
+The same desugaring applies to type parameters. For instance,
+```scala
+[F[X] <: Coll[X]]
+```
+is treated as a shorthand for
+```scala
+[F >: Nothing <: [X] =>> Coll[X]]
+```
+
+##### Type Alias
+A parameterized type alias
+```scala
+type ´t´[´\mathit{tps}\,´] = ´T´
+```
+is desugared into an unparameterized type alias
+```scala
+type ´t´ = [´\mathit{tps'}\,´] =>> ´T´
+```
+where ´\mathit{tps'}´ is computed as in the previous case.
+
+#### Inferred type parameter clause
+
+To each type constructor corresponds an _inferred type parameter clause_ which is computed as follow:
+- For a type lambda, its type parameter clause (including variance annotations).
+- For a type declaration upper-bounded by a type lambda ´T´, the inferred clause of ´T´.
+- For a polymorphic class, its type parameter clause.
 
 <!-- ### Overloaded Types
 
@@ -641,6 +696,8 @@ We define the following relations between types.
 
 ### Equivalence
 
+´\color{red}{\text{TODO SCALA3: Redefine equivalence as mutual conformance?}}´
+
 Equivalence ´(\equiv)´ between types is the smallest congruence [^congruence] such that the following holds:
 
 - If ´t´ is defined by a type alias `type ´t´ = ´T´`, then ´t´ is equivalent to ´T´.
@@ -687,7 +744,7 @@ The conformance relation ´(<:)´ is the smallest transitive relation that satis
 - If ´T_i \equiv T_i'´ for ´i \in \{ 1, ..., n\}´ and ´U´ conforms to ´U'´ then the method type ´(p_1:T_1, ..., p_n:T_n) U´ conforms to ´(p_1':T_1', ..., p_n':T_n') U'´.
 - The polymorphic type ´[a_1 >: L_1 <: U_1, ..., a_n >: L_n <: U_n] T´ conforms to the polymorphic type ´[a_1 >: L_1' <: U_1', ..., a_n >: L_n' <: U_n'] T'´ if, assuming ´L_1' <: a_1 <: U_1', ..., L_n' <: a_n <: U_n'´ one has ´T <: T'´ and ´L_i <: L_i'´ and ´U_i' <: U_i´ for ´i \in \{ 1, ..., n \}´.
 - Type constructors ´T´ and ´T'´ follow a similar discipline.
-We characterize ´T´ and ´T'´ by their type parameter clauses ´[a_1, ..., a_n]´ and ´[a_1', ..., a_n']´, where an ´a_i´ or ´a_i'´ may include a variance annotation, a higher-order type parameter clause, and bounds.
+We characterize ´T´ and ´T'´ by their [inferred type parameter clauses](inferred-type-parameter-clause) ´[a_1, ..., a_n]´ and ´[a_1', ..., a_n']´.
 Then, ´T´ conforms to ´T'´ if any list ´[t_1, ..., t_n]´ -- with declared variances, bounds and higher-order type parameter clauses -- of valid type arguments for ´T'´ is also a valid list of type arguments for ´T´ and ´T[t_1, ..., t_n] <: T'[t_1, ..., t_n]´.
 Note that this entails that:
   - The bounds on ´a_i´ must be weaker than the corresponding bounds declared for ´a'_i´.
