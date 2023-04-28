@@ -506,57 +506,11 @@ TypeLambdaParam  ::=  {Annotation} (id | ‘_’) [TypeParamClause] [‘>:’ Ty
 A _type constructor_ is either:
 - a _type lambda_, of the form `[´\mathit{tps}\,´] =>> ´T´` where `[´\mathit{tps}\,´]` is a type parameter clause `[´a_1´ >: ´L_1´ <: ´U_1, ..., a_n´ >: ´L_n´ <: ´U_n´]` for some ´n \gt 0´ and ´T´ is either a value type
 or another type lambda.
-- a reference to an unparameterized [type declaration](04-basic-declarations-and-definitions.html#type-declarations-and-type-aliases) upper-bounded by a type lambda.
-- A reference to a parameterized type declaration.
-- A reference to a [polymorphic class](05-classes-and-objects.html##class-definitions).
+- a reference to a [desugared type declaration](04-basic-declarations-and-definitions.html#type-declarations-and-type-aliases) upper-bounded by a type lambda.
+- a reference to a [polymorphic class](05-classes-and-objects.html##class-definitions).
 
 Each type parameter ´a_i´ of a type lambda has a variance ´v_i´ which cannot be written down by the user but is inferred from the body of the type lambda to maximize the number of types that conform to the type lambda.
 <!-- TODO: write down the exact algorithm? -->
-
-#### Desugaring of parameterized type declarations
-A parameterized type declaration is desugared into an unparameterized type declaration
-whose bounds are type lambdas with explicit variance annotations.
-
-##### Abstract Type
-An abstract type
-```scala
-type ´t´[´\mathit{tps}\,´] >: ´L´ <: ´U´
-```
-is desugared into an unparameterized abstract type as follow:
-- If `L` conforms to `Nothing`, then,
-
-  ```scala
-type ´t´ >: Nothing
-       <: [´\mathit{tps'}\,´] =>> ´U´
-  ```
-- otherwise,
-
-  ```scala
-type ´t´ >: [´\mathit{tps'}\,´] =>> ´L´
-       <: [´\mathit{tps'}\,´] =>> ´U´
-  ```
-  
-If at least one of the ´\mathit{tps}´ contains an explicit variance annotation, then ´\mathit{tps'} = \mathit{tps}´, otherwise we infer the variance of each type parameter as with the user-written type lambda `[´\mathit{tps}\,´] =>> ´U´`.
-
-The same desugaring applies to type parameters. For instance,
-```scala
-[F[X] <: Coll[X]]
-```
-is treated as a shorthand for
-```scala
-[F >: Nothing <: [X] =>> Coll[X]]
-```
-
-##### Type Alias
-A parameterized type alias
-```scala
-type ´t´[´\mathit{tps}\,´] = ´T´
-```
-is desugared into an unparameterized type alias
-```scala
-type ´t´ = [´\mathit{tps'}\,´] =>> ´T´
-```
-where ´\mathit{tps'}´ is computed as in the previous case.
 
 #### Inferred type parameter clause
 
