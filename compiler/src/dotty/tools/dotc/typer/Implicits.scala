@@ -1510,7 +1510,7 @@ trait Implicits:
     end searchImplicit
 
     def isUnderSpecifiedArgument(tp: Type): Boolean =
-      tp.isRef(defn.NothingClass) || tp.isRef(defn.NullClass) || (tp eq NoPrefix)
+      tp.isRef(defn.NothingClass) || (!ctx.explicitNulls && tp.isRef(defn.NullClass)) || (tp eq NoPrefix)
 
     private def isUnderspecified(tp: Type): Boolean = tp.stripTypeVar match
       case tp: WildcardType =>
