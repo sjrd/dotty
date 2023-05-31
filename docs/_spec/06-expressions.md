@@ -1198,7 +1198,10 @@ A class or object ´C´ is _derived_ from a class or object ´D´ if one of the 
 
 An alternative ´A´ is _more specific_ than an alternative ´B´ if the relative weight of ´A´ over ´B´ is greater than the relative weight of ´B´ over ´A´.
 
-It is an error if there is no alternative in ´\mathscr{CC}´ which is more specific than all other alternatives in ´\mathscr{CC}´.
+If there is no alternative in ´\mathscr{CC}´ that is more specific than all other alternatives in ´\mathscr{CC}´, then
+
+- If `´e´(´e_1´, ..., ´e_m´)` itself appears as a function in an application, i.e., if ´e´ is applied to more than one argument list, then resolution is re-tried using one more argument list.
+- Otherwise, it is an error.
 
 Assume next that ´e´ appears as a method in a type application, as in `´e´[´\mathit{targs}\,´]`.
 Then all alternatives in ´\mathscr{A}´ which take the same number of type parameters as there are type arguments in ´\mathit{targs}´ are chosen.

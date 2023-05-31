@@ -35,13 +35,6 @@ g(2)(3)(4)     // ok
 g(2)(3)("")    // ok
 ```
 
-To make this work, the rules for overloading resolution in [SLS §6.26.3](https://www.scala-lang.org/files/archive/spec/2.13/06-expressions.html#overloading-resolution) are augmented
-as follows:
-
-> In a situation where a function is applied to more than one argument list, if overloading
-resolution yields several competing alternatives when `n >= 1` parameter lists are taken
-into account, then resolution re-tried using `n + 1` argument lists.
-
 This change is motivated by the new language feature
 [extension methods](../contextual/extension-methods.md), where emerges the need to do
 overload resolution based on additional argument blocks.
