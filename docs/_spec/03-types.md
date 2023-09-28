@@ -9,10 +9,12 @@ chapter: 3
 ```ebnf
 Type                  ::=  FunType
                         |  TypeLambda
+                        |  MatchType
                         |  InfixType
 FunType               ::=  FunTypeArgs ‘=>’ Type
                         |  TypeLambdaParams '=>' Type
 TypeLambda            ::=  TypeLambdaParams ‘=>>’ Type
+MatchType             ::=  InfixType ‘match’ <<< TypeCaseClauses >>>
 InfixType             ::=  RefinedType
                         |  RefinedTypeOrWildcard id [nl] RefinedTypeOrWildcard {id [nl] RefinedTypeOrWildcard}
 RefinedType           ::=  AnnotType {[nl] Refinement}
@@ -50,6 +52,9 @@ TypeLambdaParams      ::=  ‘[’ TypeLambdaParam {‘,’ TypeLambdaParam} ‘
 TypeLambdaParam       ::=  {Annotation} (id | ‘_’) [TypeParamClause] TypeBounds
 TypeParamClause       ::=  ‘[’ VariantTypeParam {‘,’ VariantTypeParam} ‘]’
 VariantTypeParam      ::=  {Annotation} [‘+’ | ‘-’] (id | ‘_’) [TypeParamClause] TypeBounds
+
+TypeCaseClauses       ::=  TypeCaseClause { TypeCaseClause }
+TypeCaseClause        ::=  ‘case’ (InfixType | ‘_’) ‘=>’ Type [semi]
 
 RefineDef             ::=  ‘val’ ValDef
                         |  ‘def’ DefDef
@@ -91,6 +96,7 @@ Type              ::=  ‘AnyKind‘
                     |  RecursiveThis
                     |  UnionType
                     |  IntersectionType
+                    |  MatchType
                     |  SkolemType
 
 TypeLambda        ::=  ‘[‘ TypeParams ‘]‘ ‘=>>‘ Type
@@ -127,6 +133,14 @@ RecursiveThis     ::=  recid ‘.‘ ‘this‘
 UnionType         ::=  Type ‘｜‘ Type
 IntersectionType  ::=  Type ‘＆‘ Type
 
+MatchType               ::=  Type ‘match‘ ‘{‘ {TypeCaseClause} ‘}‘ ‘<:‘ Type
+TypeCaseClause          ::=  ‘case‘ TypeCasePattern ‘=>‘ Type
+TypeCasePattern         ::=  TypeCapture
+                          |  TypeCaseAppliedPattern
+                          |  Type
+TypeCaseAppliedPattern  ::=  Type ‘[‘ TypeCasePattern { ‘,‘ TypeCasePattern } ‘]‘
+TypeCapture             ::=  (id | ‘_‘) TypeBounds
+
 SkolemType        ::=  ‘∃‘ skolemid ‘:‘ Type
 
 TypeOrMethodic    ::=  Type
@@ -141,7 +155,7 @@ MethodTypeParam   ::=  id ‘:‘ Type
 
 PolyType          ::=  ‘[‘ PolyTypeParams ‘]‘ TypeOrMethodic
 PolyTypeParams    ::=  PolyTypeParam {‘,‘ PolyTypeParam}
-PolyTypeParam     ::=  ‘id‘ TypeBounds
+PolyTypeParam     ::=  id TypeBounds
 
 TypeAliasOrBounds ::=  TypeAlias
                     |  TypeBounds
@@ -272,6 +286,36 @@ The conversion from the concrete syntax to the abstract syntax works as follows:
 2. Replace every implicit or explicit reference to `this` in the refinement definitions by ´\alpha´.
 3. Create nested [refined types](#refined-types), one for every refined definition.
 4. Unless ´\alpha´ was never actually used, wrap the result in a [recursive type](#recursive-types) `{ ´\alpha´ => ´...´ }`.
+
+### Concrete Match Types
+
+```ebnf
+MatchType             ::=  InfixType ‘match’ <<< TypeCaseClauses >>>
+TypeCaseClauses       ::=  TypeCaseClause { TypeCaseClause }
+TypeCaseClause        ::=  ‘case’ (InfixType | ‘_’) ‘=>’ Type [semi]
+```
+
+In the concrete syntax of match types, patterns are arbitrary `InfixType`s, and there is no explicit notion of type capture.
+In the abstract syntax, however, captures are made explicit and can only appear as arguments to `TypeCaseAppliedPattern`s.
+
+If the concrete pattern is `_`, its conversion is the abstract type `scala.Any`.
+If it is a concrete `InfixType`, it is first converted to an abstract type ´P´.
+If ´P´ is not a `ParameterizedType`, then use ´P´ as the abstract pattern.
+Otherwise, ´P´ is recursively converted into a `TypeCasePattern` as follows:
+
+1. If ´P´ is a `WildcardTypeArg` of the form `? >: ´L´ <: ´H´`, return a `TypeCapture` of the form `_ >: ´L´ <: ´H´`.
+2. If ´P´ is a direct type designator `´t´` whose name starts with a lowercase and was not written using backticks, return a `TypeCapture` `´t´ >: ´L´ <: ´H´` where `>: ´L´ <: ´H´` is the declared type definition of `´t´`.
+3. If ´P´ is a `ParameterizedType` of the form `´T´[´T_1´, ..., ´T_n´]`:
+  1. Recursively convert each ´T_i´ into a pattern ´P_i´.
+  2. If ´P_i´ is a `Type` for all ´i´, return ´P´.
+  3. Otherwise, return the `TypeCaseAppliedPattern` `´T´[´P_1´, ..., ´P_n´]`.
+4. Otherwise, return ´P´.
+
+This conversion ensures that every `TypeCaseAppliedPattern` recursively contains at least one `TypeCapture`.
+Moreover, at the top level, the pattern is never a `TypeCapture`: all `TypeCapture`s are nested within a `TypeCaseAppliedPattern`.
+
+The bound of the abstract `MatchType` is always `<: scala.Any` by default.
+It can be overridden in a [type member definition](./04-basic-definitions.html#type-member-definitions).
 
 ### Concrete Type Lambdas
 
@@ -806,6 +850,174 @@ class B extends C[B] with D with E
 ```
 
 The join of ´A ｜ B´ is ´C[A ｜ B] ＆ D´
+
+### Match Types
+
+```ebnf
+MatchType               ::=  Type ‘match‘ ‘{‘ {TypeCaseClause} ‘}‘ ‘<:‘ Type
+TypeCaseClause          ::=  ‘case‘ TypeCasePattern ‘=>‘ Type
+TypeCasePattern         ::=  TypeCapture
+                          |  TypeCaseAppliedPattern
+                          |  Type
+TypeCaseAppliedPattern  ::=  Type ‘[‘ TypeCasePattern { ‘,‘ TypeCasePattern } ‘]‘
+TypeCapture             ::=  (id | ‘_‘) TypeBounds
+```
+
+A match type contains a scrutinee, a list of case clauses, and an upper bound.
+The scrutinee and the upper bound must both be proper types.
+A match type can be *reduced* to the body of a case clause if the scrutinee matches its pattern, and if it is *provably disjoint* from every earlier pattern.
+
+#### Legal patterns
+
+A `TypeCasePattern` is a legal pattern if and only if one of the following is true:
+
+* It is a `Type`, or
+* It is a `TypeCaseAppliedPattern` of the form `´P´[´P_1´, ..., ´P_n´]` where ´P´ is a "pattern-legal type constructor" and for each ´i´, either:
+  * ´P_i´ is a `TypeCapture`, or
+  * ´P_i´ is a `Type`, or
+  * ´P_i´ is a `TypeCaseAppliedPattern`, the type constructor ´P´ is *covariant* in its ´i´th type parameter, and ´P_i´ is recursively a legal pattern.
+
+A type ´P´ is a "pattern-legal type constructor" if one of the following is true:
+
+* It is a *class* type constructor, or
+* It is the `scala.compiletime.ops.int.S` type constructor, or
+* It is an *abstract* type constructor, or
+* It is a type lambda with a refined result type of the form `[´a´ >: ´L´ <: ´H´] =>> ´B´ { type ´T´ = ´a´ }` where:
+  * ´B´ contains no occurrence of ´a´,
+  * there exists a type member ´T´ in ´B´, and
+  * the bounds `>: ´L´ <: ´H´` are not any more restrictive than those of ´T´ in ´B´, i.e., `´L´ <: ´(∃ \alpha : B).T´ <: ´H´`.
+* It is a type lambda of the form `[´\pm a_1 >: L_1 <: H_1´, ..., ´\pm a_n >: L_n <: H_n´] =>> ´U´` such that:
+  * Its bounds contain all possible values of its arguments, and
+  * When applied to the type arguments, it beta-reduces to a new legal `MatchTypeAppliedPattern` that contains exactly one instance of every type capture present in the type arguments.
+* It is a concrete type designator with underlying type definition `= ´U´` and ´U´ is recursively a "pattern-legal type constructor".
+
+##### Examples of legal patterns
+
+Given the following definitions:
+
+```scala
+class Inv[A]
+class Cov[+A]
+class Contra[-A]
+
+class Base {
+  type Y
+}
+
+type YExtractor[t] = Base { type Y = t }
+type ZExtractor[t] = Base { type Z = t }
+
+type IsSeq[t <: Seq[Any]] = t
+```
+
+Here are examples of legal patterns:
+
+```scala
+// TypeWithoutCapture's
+case Any => // also the desugaring of `case _ =>` when the _ is at the top-level
+case Int =>
+case List[Int] =>
+case Array[String] =>
+
+// Class type constructors with direct captures
+case scala.collection.immutable.List[t] => // not Predef.List; it is a type alias
+case Array[t] =>
+case Contra[t] =>
+case Either[s, t] =>
+case Either[s, Contra[Int]] =>
+case h *: t =>
+case Int *: t =>
+
+// The S type constructor
+case S[n] =>
+
+// An abstract type constructor
+// given a [F[_]] or `type F[_] >: L <: H` in scope
+case F[t] =>
+
+// Nested captures in covariant position
+case Cov[Inv[t]] =>
+case Cov[Cov[t]] =>
+case Cov[Contra[t]] =>
+case Array[h] *: t => // sugar for *:[Array[h], t]
+case g *: h *: EmptyTuple =>
+
+// Type aliases
+case List[t] => // which is Predef.List, itself defined as `type List[+A] = scala.collection.immutable.List[A]`
+
+// Refinements (through a type alias)
+case YExtractor[t] =>
+```
+
+The following patterns are *not* legal:
+
+```scala
+// Type capture nested two levels below a non-covariant type constructor
+case Inv[Cov[t]] =>
+case Inv[Inv[t]] =>
+case Contra[Cov[t]] =>
+
+// Type constructor with bounds that do not contain all possible instantiations
+case IsSeq[t] =>
+
+// Type refinement where the refined type member is not a member of the parent
+case ZExtractor[t] =>
+```
+
+#### Matching
+
+Given a scrutinee `X` and a match type case `case P => R` with type captures `ts`, matching proceeds in three steps:
+
+1. Compute instantiations for the type captures `ts'`, and check that they are *specific* enough.
+2. If successful, check that `X <:< [ts := ts']P`.
+3. If successful, reduce to `[ts := ts']R`.
+
+The instantiations are computed by the recursive function `matchPattern(X, P, variance, scrutIsWidenedAbstract)`.
+At the top level, `variance = 1` and `scrutIsWidenedAbstract = false`.
+
+`matchPattern` behaves according to what kind is `P`:
+
+* If `P` is a `TypeWithoutCapture`:
+  * Do nothing (always succeed).
+* If `P` is a `WildcardCapture` `ti = _`:
+  * If `X` is of the form `_ >: L <: H`, instantiate `ti := H` (anything between `L` and `H` would work here),
+  * Otherwise, instantiate `ti := X`.
+* If `P` is a `TypeCapture` `ti`:
+  * If `X` is of the form `_ >: L <: H`,
+    * If `scrutIsWidenedAbstract` is `true`, fail as not specific.
+    * Otherwise, if `variance = 1`, instantiate `ti := H`.
+    * Otherwise, if `variance = -1`, instantiate `ti := L`.
+    * Otherwise, fail as not specific.
+  * Otherwise, if `variance = 0` or `scrutIsWidenedAbstract` is `false`, instantiate `ti := X`.
+  * Otherwise, fail as not specific.
+* If `P` is a `MatchTypeAppliedPattern` of the form `T[Qs]`:
+  * Assert: `variance = 1` (from the definition of legal patterns).
+  * If `T` is a class type constructor of the form `p.C`:
+    * If `baseType(X, C)` is not defined, fail as not matching.
+    * Otherwise, it is of the form `q.C[Us]`.
+    * If `p =:= q` is false, fail as not matching.
+    * Let `innerScrutIsWidenedAbstract` be true if either `scrutIsWidenedAbstract` or `X` is not a concrete type.
+    * For each pair of `(Ui, Qi)`, compute `matchPattern(Ui, Qi, vi, innerScrutIsWidenedAbstract)` where `vi` is the variance of the `i`th type parameter of `T`.
+  * If `T` is `scala.compiletime.ops.int.S`:
+    * If `n = natValue(X)` is undefined or `n <= 0`, fail as not matching.
+    * Otherwise, compute `matchPattern(n - 1, Q1, 1, scrutIsWidenedAbstract)`.
+  * If `T` is an abstract type constructor:
+    * If `X` is not of the form `F[Us]` or `F =:= T` is false, fail as not matching.
+    * Otherwise, for each pair of `(Ui, Qi)`, compute `matchPattern(Ui, Qi, vi, scrutIsWidenedAbstract)` where `vi` is the variance of the `i`th type parameter of `T`.
+  * If `T` is a refined type of the form `Base { type Y = ti }`:
+    * Let `q` be `X` if `X` is a stable type, or the skolem type `∃α:X` otherwise.
+    * If `q` does not have a type member `Y`, fail as not matching (that implies that `X <:< Base` is false, because `Base` must have a type member `Y` for the pattern to be legal).
+    * If `q.Y` is abstract, fail as not specific.
+    * If `q.Y` is a class member:
+      * If `q` is a skolem type `∃α:X`, fail as not specific.
+      * Otherwise, compute `matchPattern(ti, q.Y, 0, scrutIsWidenedAbstract)`.
+    * Otherwise, the underlying type definition of `q.Y` is of the form `= U`:
+      * If `q` is a skolem type `∃α:X` and `U` refers to `α`, fail as not specific.
+      * Otherwise, compute `matchPattern(ti, U, 0, scrutIsWidenedAbstract)`.
+  * If `T` is a concrete type alias to a type lambda:
+    * Let `P'` be the beta-reduction of `P`.
+    * Compute `matchPattern(P', X, variance, scrutIsWidenedAbstract)`.
+
 
 ### Skolem Types
 
