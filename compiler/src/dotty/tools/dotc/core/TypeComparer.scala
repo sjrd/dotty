@@ -3476,8 +3476,10 @@ class TrackingTypeComparer(initctx: Context) extends TypeComparer(initctx) {
                 val info = denot.info match
                   case TypeAlias(alias)                => alias              // Extract the alias
                   case ClassInfo(prefix, cls, _, _, _) => prefix.select(cls) // Re-select the class from the prefix
+                  case info if stableScrut eq scrut    => stableScrut.select(typeMemberName)
                   case info => info // Notably, RealTypeBounds, which will eventually give a MatchResult.NoInstances
                 val infoRefersToSkolem = stableScrut.isInstanceOf[SkolemType] && stableScrut.occursIn(info)
+                println(i"$scrut -- $pattern -- $stableScrut -- $info -- $infoRefersToSkolem")
                 val info1 = info match
                   case info: TypeBounds        => info                       // Will already trigger a MatchResult.NoInstances
                   case _ if infoRefersToSkolem => RealTypeBounds(info, info) // Explicitly trigger a MatchResult.NoInstances
