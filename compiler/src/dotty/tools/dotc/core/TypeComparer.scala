@@ -3241,7 +3241,7 @@ class TypeComparer(@constructorOnly initctx: Context) extends ConstraintHandling
 
     // In the invariant case, direct type parameter disjointness is enough.
     def invariantDisjoint(tp1: Type, tp2: Type, tparam: TypeParamInfo): Boolean =
-      provablyDisjoint(tp1, tp2, pending)
+      provablyDisjoint(tp1, tp2, pending) && typeparamCorrespondsToField(cls.appliedRef, tparam)
 
     args1.lazyZip(args2).lazyZip(cls.typeParams).exists {
       (arg1, arg2, tparam) =>
