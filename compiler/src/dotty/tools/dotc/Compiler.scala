@@ -127,10 +127,10 @@ class Compiler {
     List(new Constructors,           // Collect initialization code in primary constructors
                                         // Note: constructors changes decls in transformTemplate, no InfoTransformers should be added after it
          new Instrumentation) ::     // Count calls and allocations under -Yinstrument
-    List(new LambdaLift,             // Lifts out nested functions to class scope, storing free variables in environments
+    List(new LambdaLift) ::          // Lifts out nested functions to class scope, storing free variables in environments
                                      // Note: in this mini-phase block scopes are incorrect. No phases that rely on scopes should be here
-         new ElimStaticThis,         // Replace `this` references to static objects by global identifiers
-         new CountOuterAccesses) ::  // Identify outer accessors that can be dropped
+    List(new ElimStaticThis) ::      // Replace `this` references to static objects by global identifiers
+    List(new CountOuterAccesses) ::  // Identify outer accessors that can be dropped
     List(new DropOuterAccessors,     // Drop unused outer accessors
          new DropParentRefinements,  // Drop parent refinements from a template
          new CheckNoSuperThis,       // Check that supercalls don't contain references to `this`

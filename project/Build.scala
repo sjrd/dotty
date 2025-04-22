@@ -40,7 +40,7 @@ import sbttastymima.TastyMiMaPlugin.autoImport._
 import scala.util.Properties.isJavaAtLeast
 
 import org.portablescala.sbtplatformdeps.PlatformDepsPlugin.autoImport._
-import org.scalajs.linker.interface.{ModuleInitializer, StandardConfig}
+import org.scalajs.linker.interface.{ESVersion, ModuleInitializer, StandardConfig}
 
 object DottyJSPlugin extends AutoPlugin {
   import Build._
@@ -48,6 +48,12 @@ object DottyJSPlugin extends AutoPlugin {
   object autoImport {
     val switchToESModules: StandardConfig => StandardConfig =
       config => config.withModuleKind(ModuleKind.ESModule)
+
+    val switchToLatestESVersion: StandardConfig => StandardConfig =
+      config => config.withESFeatures(_.withESVersion(ESVersion.ES2021))
+
+    val enableWebAssembly: SettingKey[Boolean] =
+      settingKey("enable all the configuration items required for WebAssembly")
   }
 
   val writePackageJSON = taskKey[Unit](
@@ -1740,6 +1746,8 @@ object Build {
 
         val moduleKind = linkerConfig.moduleKind
         val hasModules = moduleKind != ModuleKind.NoModule
+        val hasAsyncAwait = linkerConfig.esFeatures.esVersion >= ESVersion.ES2017
+        val isWebAssembly = linkerConfig.experimentalUseWebAssembly
 
         def conditionally(cond: Boolean, subdir: String): Seq[File] =
           if (!cond) Nil
@@ -1772,6 +1780,9 @@ object Build {
           ++ conditionally(hasModules && !linkerConfig.closureCompiler, "js/src/test/require-multi-modules")
           ++ conditionally(moduleKind == ModuleKind.ESModule, "js/src/test/require-dynamic-import")
           ++ conditionally(moduleKind == ModuleKind.ESModule, "js/src/test/require-esmodule")
+
+          ++ conditionally(hasAsyncAwait, "js/src/test/require-async-await")
+          ++ conditionally(hasAsyncAwait && isWebAssembly, "js/src/test/require-orphan-await")
         )
       },
 

@@ -2,14 +2,14 @@ package hello
 
 import scala.scalajs.js
 
-trait MyTrait {
-  val x = 5
-  def foo(y: Int) = x
-}
-
-object HelloWorld extends MyTrait {
+object HelloWorld {
   def main(args: Array[String]): Unit = {
-    println("hello dotty.js!")
-    println(foo(4))
+    val p = js.Promise.resolve[Int](5)
+    val r = js.async {
+      3 * js.await(p)
+    }
+    js.async {
+      println(js.await(r) + 1)
+    }
   }
 }

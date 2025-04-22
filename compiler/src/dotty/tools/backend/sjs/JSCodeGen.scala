@@ -38,6 +38,8 @@ import dotty.tools.dotc.transform.sjs.JSSymUtils.*
 import JSEncoding.*
 import ScopedVar.withScopedVars
 import scala.reflect.NameTransformer
+import dotty.tools.dotc.core.NameKinds.AdaptedClosureName
+import dotty.tools.dotc.core.NameKinds.UniqueName
 
 /** Main codegen for Scala.js IR.
  *
@@ -75,6 +77,7 @@ class JSCodeGen()(using genCtx: Context) {
   private val generatedStaticForwarderClasses = mutable.ListBuffer.empty[(Symbol, js.ClassDef)]
 
   val currentClassSym = new ScopedVar[Symbol]
+  private val delambdafyTargetDefDefs = new ScopedVar[MutableSymbolMap[DefDef]]
   private val currentMethodSym = new ScopedVar[Symbol]
   private val localNames = new ScopedVar[LocalNameGenerator]
   private val thisLocalVarName = new ScopedVar[Option[LocalName]]
@@ -88,6 +91,7 @@ class JSCodeGen()(using genCtx: Context) {
   private def resetAllScopedVars[T](body: => T): T = {
     withScopedVars(
         currentClassSym := null,
+        delambdafyTargetDefDefs := null,
         currentMethodSym := null,
         localNames := null,
         thisLocalVarName := null,
@@ -241,7 +245,8 @@ class JSCodeGen()(using genCtx: Context) {
 
       if (!isPrimitive) {
         withScopedVars(
-            currentClassSym := sym
+            currentClassSym := sym,
+            delambdafyTargetDefDefs := MutableSymbolMap()
         ) {
           val tree = if (sym.isJSType) {
             if (!sym.is(Trait) && sym.isNonNativeJSClass)
@@ -313,6 +318,37 @@ class JSCodeGen()(using genCtx: Context) {
     val dir = pathParts.init.foldLeft(outputDirectory)(_.subdirectoryNamed(_))
     val filename = pathParts.last
     dir.fileNamed(filename + suffix)
+  }
+
+  private def collectDefDefs(impl: Template): List[DefDef] = {
+    val b = List.newBuilder[DefDef]
+
+    for (stat <- impl.body) {
+      stat match {
+        case stat: DefDef =>
+          if (stat.symbol.isAnonymousFunction)
+            delambdafyTargetDefDefs(stat.symbol) = stat
+          else
+            b += stat
+
+        case EmptyTree | _:ValDef =>
+          ()
+
+        case _ =>
+          throw new FatalError(i"Unexpected tree in template: $stat at ${stat.sourcePos}")
+      }
+    }
+
+    b.result()
+  }
+
+  private def consumeDelambdafyTarget(sym: Symbol): DefDef = {
+    delambdafyTargetDefDefs.remove(sym) match {
+      case null =>
+        throw new FatalError(i"Cannot resolve delambdafy target $sym at ${sym.sourcePos}")
+      case defDef =>
+        defDef
+    }
   }
 
   // Generate a class --------------------------------------------------------
@@ -1500,6 +1536,12 @@ class JSCodeGen()(using genCtx: Context) {
     val vparamss = dd.termParamss
     val rhs = dd.rhs
 
+    println(i"${sym.name} ; ${sym.name.debugString} ; ${sym.name.is(AdaptedClosureName)}")
+    sym.name match {
+      case UniqueName(underlying, _) => println(underlying.is(AdaptedClosureName))
+      case _                         => println("-")
+    }
+
     /* Is this method a default accessor that should be ignored?
      *
      * This is the case iff one of the following applies:
@@ -2362,7 +2404,8 @@ class JSCodeGen()(using genCtx: Context) {
     val typeDef = consumeLazilyGeneratedAnonClass(sym)
     val originalClassDef = resetAllScopedVars {
       withScopedVars(
-          currentClassSym := sym
+          currentClassSym := sym,
+          delambdafyTargetDefDefs := MutableSymbolMap()
       ) {
         genNonNativeJSClass(typeDef)
       }
