@@ -7,8 +7,9 @@ import scala.scalajs.concurrent.JSExecutionContext
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters.*
 import scala.scalajs.js.annotation.JSExportTopLevel
-import scala.scalajs.js.typedarray.{Int8Array, Uint8Array}
+import scala.scalajs.js.typedarray.Uint8Array
 
+import dotty.tools.io.JSByteArrays
 import org.scalajs.ir.Version
 import org.scalajs.linker.MemOutputDirectory
 import org.scalajs.linker.StandardImpl
@@ -31,6 +32,9 @@ object BrowserLinkerBridge:
     val path: String
     val bytes: Uint8Array
 
+  def irInput(path: String, bytes: Uint8Array): IRInput =
+    js.Dynamic.literal(path = path, bytes = bytes).asInstanceOf[IRInput]
+
   @JSExportTopLevel("linkScalaJSAsync")
   def linkAsync(irFiles: js.Array[IRInput], mainClassName: String): js.Promise[js.Object] =
     link(irFiles, Seq(ModuleInitializer.mainMethodWithArgs(mainClassName, "main", Nil)))
@@ -52,7 +56,7 @@ object BrowserLinkerBridge:
     val outputDir = MemOutputDirectory()
     val inputIRFiles =
       irFiles.toSeq.zipWithIndex.map { case (irFile, index) =>
-        new MemIRFileImpl(irFile.path, Version.fromInt(index), toByteArray(irFile.bytes))
+        new MemIRFileImpl(irFile.path, Version.fromInt(index), JSByteArrays.toByteArray(irFile.bytes))
       }
 
     linker
@@ -81,17 +85,6 @@ object BrowserLinkerBridge:
       }
       js.Dynamic.literal(
         path = name,
-        bytes = toUint8Array(bytes),
+        bytes = JSByteArrays.toUint8Array(bytes),
       )
     }
-
-  private def toUint8Array(bytes: Array[Byte]): Uint8Array =
-    val arr = new Uint8Array(bytes.length)
-    var i = 0
-    while i < bytes.length do
-      arr(i) = (bytes(i) & 0xff).toShort
-      i += 1
-    arr
-
-  private def toByteArray(bytes: Uint8Array): Array[Byte] =
-    new Int8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength).toArray

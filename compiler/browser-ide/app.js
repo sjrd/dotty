@@ -67,7 +67,7 @@ const importMacroInput = document.querySelector("#import-macro-input");
 const terminalForm = document.querySelector("#terminal-form");
 const terminalInput = document.querySelector("#terminal-input");
 
-const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+const worker = new Worker(new URL(`./worker.js?boot=${Date.now()}`, import.meta.url), { type: "module" });
 
 let ready = false;
 let running = false;
@@ -105,6 +105,21 @@ function formatDuration(milliseconds) {
   }
   const seconds = milliseconds / 1000;
   return `${seconds.toFixed(seconds < 10 ? 2 : 1)} s`;
+}
+
+function formatTimingSummary(message) {
+  const durationText = formatDuration(message.durationMs);
+  if (!durationText) {
+    return "";
+  }
+
+  const topPhases = [...(message.phases ?? [])]
+    .filter((phase) => phase.name && phase.durationMs >= 1)
+    .sort((left, right) => right.durationMs - left.durationMs)
+    .slice(0, 3)
+    .map((phase) => `${phase.name} ${formatDuration(phase.durationMs)}`);
+  const details = topPhases.length > 0 ? ` · ${topPhases.join(" · ")}` : "";
+  return `Ready in ${durationText}${details}`;
 }
 
 function normalizePathForDisplay(path) {
@@ -148,6 +163,17 @@ function syncCurrentFile() {
 function renderOutput(text) {
   outputEl.textContent = text;
   outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+function blockRuntime(message) {
+  ready = false;
+  running = false;
+  waitingForInput = false;
+  runtimeBlocked = true;
+  setTerminalInputVisible(false);
+  setCompileTimer("");
+  updateButtonState();
+  renderOutput(message);
 }
 
 function renderFileTabs() {
@@ -438,8 +464,7 @@ worker.addEventListener("message", (event) => {
 
     case "compile-duration":
       {
-        const durationText = formatDuration(message.durationMs);
-        setCompileTimer(durationText ? `Compiled in ${durationText}` : "");
+        setCompileTimer(formatTimingSummary(message));
       }
       break;
 
@@ -451,14 +476,7 @@ worker.addEventListener("message", (event) => {
       break;
 
     case "runtime-error":
-      ready = false;
-      running = false;
-      waitingForInput = false;
-      runtimeBlocked = true;
-      setTerminalInputVisible(false);
-      setCompileTimer("");
-      updateButtonState();
-      renderOutput(message.error);
+      blockRuntime(message.error);
       break;
 
     default:
@@ -466,9 +484,17 @@ worker.addEventListener("message", (event) => {
   }
 });
 
+worker.addEventListener("error", (event) => {
+  event.preventDefault();
+  blockRuntime(event.message || "The compiler worker failed before it could report an error.");
+});
+
+worker.addEventListener("messageerror", () => {
+  blockRuntime("The compiler worker sent a message that the browser could not deserialize.");
+});
+
 setExample(DEFAULT_EXAMPLE);
 exampleSelectEl.value = DEFAULT_EXAMPLE;
 outputEl.textContent = "Loading compiler...";
 updateButtonState();
 setTerminalInputVisible(false);
-worker.postMessage({ type: "init" });

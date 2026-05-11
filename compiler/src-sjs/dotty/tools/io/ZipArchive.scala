@@ -104,24 +104,8 @@ final class FileZipArchive(jpath: JPath, release: Option[String]) extends ZipArc
       new PlainFile(new Path(jpath)).toByteArray
     }
 
-  private def toUint8Array(bytes: Array[Byte]): Uint8Array =
-    val out = new Uint8Array(bytes.length)
-    var i = 0
-    while i < bytes.length do
-      out(i) = (bytes(i) & 0xff).toShort
-      i += 1
-    out
-
-  private def fromUint8Array(bytes: Uint8Array): Array[Byte] =
-    val out = new Array[Byte](bytes.length)
-    var i = 0
-    while i < bytes.length do
-      out(i) = bytes(i).toByte
-      i += 1
-    out
-
   private lazy val archiveHandle: JSZipArchiveHandle =
-    js.await(JSImportJSZip.loadAsync(toUint8Array(archiveBytes)))
+    js.await(JSImportJSZip.loadAsync(JSByteArrays.toUint8Array(archiveBytes)))
 
   private def entryLastModified(entry: JSZipEntryHandle): Long =
     val dyn = entry.asInstanceOf[js.Dynamic]
@@ -178,12 +162,12 @@ final class FileZipArchive(jpath: JPath, release: Option[String]) extends ZipArc
       val entry = archiveHandle.file(zipPath)
       if entry == null then
         throw new IOException(s"Missing zip entry: $zipPath in ${FileZipArchive.this.path}")
-      new ByteArrayInputStream(fromUint8Array(js.await(entry.async("uint8array"))))
+      new ByteArrayInputStream(JSByteArrays.toByteArray(js.await(entry.async("uint8array"))))
 
     override def sizeOption: Option[Int] =
       val entry = archiveHandle.file(zipPath)
       if entry == null then None
-      else Some(fromUint8Array(js.await(entry.async("uint8array"))).length)
+      else Some(JSByteArrays.toByteArray(js.await(entry.async("uint8array"))).length)
 
   lazy val (root, allDirs): (DirEntry, collection.Map[String, DirEntry]) =
     val root = new DirEntry("/", null)

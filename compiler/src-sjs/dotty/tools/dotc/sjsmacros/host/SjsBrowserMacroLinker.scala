@@ -1,9 +1,12 @@
 package dotty.tools.dotc.sjsmacros.host
 
+import dotty.tools.io.JSByteArrays
+import dotty.tools.sjs.JSInterop
+import dotty.tools.sjs.JSInterop.{dynamicArray, isDefined, stringArray}
+
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters.*
 import scala.scalajs.js.annotation.JSGlobal
-import scala.scalajs.js.typedarray.{ArrayBuffer, Int8Array, Uint8Array}
 
 /** Browser-side macro linker facade.
  *
@@ -13,7 +16,7 @@ import scala.scalajs.js.typedarray.{ArrayBuffer, Int8Array, Uint8Array}
  *  or provide
  *  the default browser inputs:
  *
- *  - `globalThis.__scala3CompilerSJSCompilerIR`
+ *  - `globalThis.__scala3CompilerSJSCompilerIRFingerprint`
  *  - `globalThis.__scala3CompilerSJSMacroArtifacts`
  *  - `globalThis.__scala3CompilerSJSLinker.link(request)`
  *
@@ -30,14 +33,14 @@ object SjsBrowserMacroLinker:
   @JSGlobal("globalThis")
   private object GlobalThis extends js.Object
 
-  private val LinkerGlobalName = "__scala3CompilerSJSMacroLinker"
-  private val CompilerIRGlobalName = "__scala3CompilerSJSCompilerIR"
-  private val MacroArtifactsGlobalName = "__scala3CompilerSJSMacroArtifacts"
-  private val ScalaJSLinkerGlobalName = "__scala3CompilerSJSLinker"
+  private val LinkerGlobalName = SjsMacroBrowserGlobals.CustomMacroLinker
+  private val CompilerIRFingerprintGlobalName = SjsMacroBrowserGlobals.CompilerIRFingerprint
+  private val MacroArtifactsGlobalName = SjsMacroBrowserGlobals.MacroArtifacts
+  private val ScalaJSLinkerGlobalName = SjsMacroBrowserGlobals.ScalaJSLinker
 
   def relink(request: js.Dynamic): js.Any =
     val linker = GlobalThis.asInstanceOf[js.Dynamic].selectDynamic(LinkerGlobalName)
-    if defined(linker) then
+    if isDefined(linker) then
       val linkCompilerWithMacros = linker.selectDynamic("linkCompilerWithMacros")
       if js.typeOf(linkCompilerWithMacros) == "function" then
         linkCompilerWithMacros.asInstanceOf[js.Function1[js.Dynamic, js.Any]](request)
@@ -61,27 +64,26 @@ object SjsBrowserMacroLinker:
         s"missing browser Scala.js macro artifacts for package(s): ${unknownPackages.sorted.mkString(", ")}"
       )
 
-    val compilerIR = irFileArray(readGlobal(CompilerIRGlobalName), CompilerIRGlobalName)
-    if compilerIR.isEmpty then
-      throw js.JavaScriptException(
-        s"missing browser compiler IR: set globalThis.$CompilerIRGlobalName before macro relinking"
-      )
-
     val macroImplementationIR =
       SjsMacroIRClosure.collect(entryPointsIR.map(_.file), SjsMacroArtifacts.implementationIR(artifacts))
+    val compilerIRFingerprintValue = readGlobal(CompilerIRFingerprintGlobalName)
+    if !isDefined(compilerIRFingerprintValue) || compilerIRFingerprintValue.toString.isEmpty then
+      throw js.JavaScriptException(
+        s"missing browser compiler IR fingerprint: set globalThis.$CompilerIRFingerprintGlobalName before macro relinking"
+      )
     val linkerConfig = Seq(
       "moduleKind=ESModule",
       "moduleInitializers=none",
     ) ++ SjsMacroArtifacts.descriptors(artifacts).map("macroArtifact=" + _)
     val cacheKey = SjsMacroRelinkCacheKey.compute(
-      compilerIR = compilerIR,
+      compilerIRFingerprint = compilerIRFingerprintValue.toString,
       entryPointsIR = entryPointsIR.map(_.file),
       macroImplementationIR = macroImplementationIR,
       linkerConfig = linkerConfig,
     )
 
     val scalaJSLinker = readGlobal(ScalaJSLinkerGlobalName)
-    if !defined(scalaJSLinker) then
+    if !isDefined(scalaJSLinker) then
       throw js.JavaScriptException(
         s"missing browser Scala.js linker: set globalThis.$ScalaJSLinkerGlobalName.link(request)"
       )
@@ -105,11 +107,11 @@ object SjsBrowserMacroLinker:
 
   private def configuredArtifacts(): Seq[SjsMacroArtifacts.Artifact] =
     val value = readGlobal(MacroArtifactsGlobalName)
-    if !defined(value) then Nil
+    if !isDefined(value) then Nil
     else
-      value.asInstanceOf[js.Array[js.Dynamic]].toSeq.map { artifact =>
+      dynamicArray(value).map { artifact =>
         val directIR = artifact.selectDynamic("implementationIR")
-        if defined(directIR) then
+        if isDefined(directIR) then
           SjsMacroArtifacts.Artifact(
             id = readOptionalString(artifact, "id").getOrElse("browser-macro-artifact"),
             macroPackages = readOptionalStringArray(artifact, "macroPackages").getOrElse(Nil),
@@ -125,88 +127,49 @@ object SjsBrowserMacroLinker:
             case (Some(id), Some(macroPackages)) =>
               SjsMacroArtifactFS.read(id, macroPackages, root)
             case _ =>
-              SjsMacroArtifactFS.read(root)
+              throw js.JavaScriptException(
+                "browser macro artifact with `root` must also define `id` and `macroPackages`"
+              )
       }
 
   private def entryPointIRArray(value: js.Any): Seq[SjsMacroArtifacts.EntryPointIR] =
-    value.asInstanceOf[js.Array[js.Dynamic]].toSeq.map { entry =>
+    dynamicArray(value).map { entry =>
       SjsMacroArtifacts.EntryPointIR(
         packageName = entry.selectDynamic("packageName").toString,
         path = entry.selectDynamic("path").toString,
-        bytes = toByteArray(entry.selectDynamic("bytes").asInstanceOf[js.Any]),
+        bytes = JSByteArrays.toByteArray(entry.selectDynamic("bytes").asInstanceOf[js.Any]),
       )
     }
 
   private def irFileArray(value: js.Any, label: String): Seq[SjsMacroArtifacts.IRFile] =
-    if !defined(value.asInstanceOf[js.Dynamic]) then Nil
-    else
-      value.asInstanceOf[js.Array[js.Dynamic]].toSeq.map { file =>
-        val path = file.selectDynamic("path")
-        val bytes = file.selectDynamic("bytes")
-        if js.isUndefined(path) || path == null || js.isUndefined(bytes) || bytes == null then
-          throw js.JavaScriptException(s"$label entries must define `path` and `bytes`")
-        SjsMacroArtifacts.IRFile(path.toString, toByteArray(bytes.asInstanceOf[js.Any]))
-      }
+    dynamicArray(value).map { file =>
+      val path = file.selectDynamic("path")
+      val bytes = file.selectDynamic("bytes")
+      if !isDefined(path) || !isDefined(bytes) then
+        throw js.JavaScriptException(s"$label entries must define `path` and `bytes`")
+      SjsMacroArtifacts.IRFile(path.toString, JSByteArrays.toByteArray(bytes.asInstanceOf[js.Any]))
+    }
 
   private def toJSIRFile(file: SjsMacroArtifacts.IRFile): js.Dynamic =
     js.Dynamic.literal(
       path = file.path,
-      bytes = toUint8Array(file.bytes),
+      bytes = JSByteArrays.toUint8Array(file.bytes),
     )
 
   private def toJSEntryPointIR(entry: SjsMacroArtifacts.EntryPointIR): js.Dynamic =
     js.Dynamic.literal(
       packageName = entry.packageName,
       path = entry.path,
-      bytes = toUint8Array(entry.bytes),
+      bytes = JSByteArrays.toUint8Array(entry.bytes),
     )
-
-  private def stringArray(value: js.Any): Seq[String] =
-    value.asInstanceOf[js.Array[js.Any]].toSeq.map(_.toString).filter(_.nonEmpty)
 
   private def readOptionalString(obj: js.Dynamic, field: String): Option[String] =
     val value = obj.selectDynamic(field)
-    if defined(value) then Some(value.toString) else None
+    Option.when(isDefined(value))(value.toString)
 
   private def readOptionalStringArray(obj: js.Dynamic, field: String): Option[Seq[String]] =
     val value = obj.selectDynamic(field)
-    if defined(value) then Some(stringArray(value.asInstanceOf[js.Any])) else None
+    Option.when(isDefined(value))(stringArray(value.asInstanceOf[js.Any]))
 
   private def readGlobal(name: String): js.Dynamic =
     GlobalThis.asInstanceOf[js.Dynamic].selectDynamic(name)
-
-  private def defined(value: js.Dynamic): Boolean =
-    !js.isUndefined(value) && value != null
-
-  private def toUint8Array(bytes: Array[Byte]): Uint8Array =
-    val arr = new Uint8Array(bytes.length)
-    var i = 0
-    while i < bytes.length do
-      arr(i) = (bytes(i) & 0xff).toShort
-      i += 1
-    arr
-
-  private def toByteArray(value: js.Any): Array[Byte] = value match
-    case arr: Uint8Array =>
-      new Int8Array(arr.buffer, arr.byteOffset, arr.byteLength).toArray
-    case _ =>
-      val dyn = value.asInstanceOf[js.Dynamic]
-      val buffer = dyn.selectDynamic("buffer")
-      if defined(buffer) then
-        val offset = intValue(dyn.selectDynamic("byteOffset").asInstanceOf[js.Any])
-        val length = intValue(dyn.selectDynamic("byteLength").asInstanceOf[js.Any])
-        new Int8Array(buffer.asInstanceOf[ArrayBuffer], offset, length).toArray
-      else
-        val length = intValue(dyn.selectDynamic("length").asInstanceOf[js.Any])
-        val out = new Array[Byte](length)
-        var i = 0
-        while i < length do
-          out(i) = intValue(dyn.apply(i).asInstanceOf[js.Any]).toByte
-          i += 1
-        out
-
-  private def intValue(value: js.Any): Int =
-    js.typeOf(value) match
-      case "number" => value.asInstanceOf[Double].toInt
-      case "string" => value.asInstanceOf[String].toIntOption.getOrElse(0)
-      case _        => 0

@@ -28,6 +28,26 @@ import scala.util.control.NonFatal
 object SjsCompilerHelloWorld {
   private val BrowserIDECompilerJSImport = """import * as importedjszip from "jszip";"""
   private val BrowserIDEPatchedJSImport = """import * as importedjszip from "../vendor/jszip-wrapper.js";"""
+  private val BrowserIDECompilerLoaderJSImport = """import { load as __load } from "./__loader.js";"""
+  private def browserIDECompilerLoaderJSImport(assetVersion: String): String =
+    s"""import { load as __load } from "./__loader.js?v=$assetVersion";"""
+  private val BrowserIDECompilerWasmLoad = """__load("./main.wasm","""
+  private def browserIDECompilerWasmLoad(assetVersion: String): String =
+    s"""__load("./main.wasm?v=$assetVersion","""
+  private val BrowserIDECompilerWasmStreamingLoad =
+    """return await WebAssembly.instantiateStreaming(fetch(resolvedURL), importsObj, options);"""
+  private val BrowserIDECompilerWasmRobustLoad =
+    """const status = globalThis.__scala3CompilerSJSStatus;
+      |    if (typeof status === "function") status("Fetching compiler WebAssembly...");
+      |    const response = await fetch(resolvedURL, { cache: "no-cache" });
+      |    if (!response.ok) {
+      |      throw new Error(`Failed to fetch ${resolvedURL}: ${response.status} ${response.statusText}`);
+      |    }
+      |    const body = await response.arrayBuffer();
+      |    if (typeof status === "function") {
+      |      status(`Instantiating compiler WebAssembly (${Math.round(body.byteLength / 1024 / 1024)} MB)...`);
+      |    }
+      |    return await WebAssembly.instantiate(body, importsObj, options);""".stripMargin
   private val MacroFixtureId = "hello-world-macro-fixture"
   private val MacroFixturePackages = Seq("smokemacros", "othermacros")
 
@@ -89,6 +109,15 @@ object SjsCompilerHelloWorld {
 
   private def updateDigestString(digest: MessageDigest, value: String): Unit =
     digest.update(value.getBytes(StandardCharsets.UTF_8))
+
+  private def browserIDEAssetVersion(files: File*): String = {
+    val digest = MessageDigest.getInstance("SHA-256")
+    files.foreach { file =>
+      updateDigestString(digest, file.getName)
+      digest.update(Files.readAllBytes(file.toPath))
+    }
+    digest.digest().take(8).map(b => "%02x".format(b & 0xff)).mkString
+  }
 
   def bundleCompilerLibs(
       targetDir: File,
@@ -158,14 +187,35 @@ object SjsCompilerHelloWorld {
     if (!compilerMain.exists() || !compilerWasm.exists() || !compilerLoader.exists())
       sys.error(s"Missing scala3-compiler-sjs fastLink output in $compilerOutputDir. Run fastLinkJS first.")
 
+    val assetVersion = browserIDEAssetVersion(compilerMain, compilerWasm, compilerLoader)
     val compilerMainContents = IO.read(compilerMain)
-    val patchedCompilerMain = compilerMainContents.replace(BrowserIDECompilerJSImport, BrowserIDEPatchedJSImport)
-    if (patchedCompilerMain == compilerMainContents)
+    val compilerMainWithJSZip = compilerMainContents.replace(BrowserIDECompilerJSImport, BrowserIDEPatchedJSImport)
+    if (compilerMainWithJSZip == compilerMainContents)
       sys.error(s"Could not rewrite JSZip import in ${compilerMain.getAbsolutePath}")
+    val compilerMainWithVersionedLoader = compilerMainWithJSZip.replace(
+      BrowserIDECompilerLoaderJSImport,
+      browserIDECompilerLoaderJSImport(assetVersion),
+    )
+    if (compilerMainWithVersionedLoader == compilerMainWithJSZip)
+      sys.error(s"Could not version WebAssembly loader import in ${compilerMain.getAbsolutePath}")
+    val patchedCompilerMain = compilerMainWithVersionedLoader.replace(
+      BrowserIDECompilerWasmLoad,
+      browserIDECompilerWasmLoad(assetVersion),
+    )
+    if (patchedCompilerMain == compilerMainWithVersionedLoader)
+      sys.error(s"Could not version WebAssembly file URL in ${compilerMain.getAbsolutePath}")
+
+    val compilerLoaderContents = IO.read(compilerLoader)
+    val patchedCompilerLoader = compilerLoaderContents.replace(
+      BrowserIDECompilerWasmStreamingLoad,
+      BrowserIDECompilerWasmRobustLoad,
+    )
+    if (patchedCompilerLoader == compilerLoaderContents)
+      sys.error(s"Could not rewrite WebAssembly loader in ${compilerLoader.getAbsolutePath}")
 
     IO.write(compilerDir / "main.js", patchedCompilerMain)
+    IO.write(compilerDir / "__loader.js", patchedCompilerLoader)
     Seq(
-      compilerLoader -> (compilerDir / "__loader.js"),
       compilerWasm -> (compilerDir / "main.wasm"),
       jszipDist -> (vendorDir / "jszip.global.js"),
       rtJar -> (classpathDir / "rt.jar"),
@@ -192,6 +242,7 @@ object SjsCompilerHelloWorld {
     IO.write(
       assetsDir / "manifest.json",
       s"""{
+        |  "assetVersion": "$assetVersion",
         |  "compilerModule": "./assets/compiler/main.js",
         |  "compilerIR": "./assets/compiler/compiler-sjsir.zip",
         |  "runtimeIR": "./assets/runtime/runtime-sjsir.zip",

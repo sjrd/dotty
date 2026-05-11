@@ -7,14 +7,15 @@ object SjsMacroRelinkCacheKey:
   import SjsMacroArtifacts.IRFile
 
   def compute(
-      compilerIR: Seq[IRFile],
+      compilerIRFingerprint: String,
       entryPointsIR: Seq[IRFile],
       macroImplementationIR: Seq[IRFile],
       linkerConfig: Seq[String],
   ): String =
     val digest = new Fingerprint
-    digest.updateString("scala3-sjs-macro-relink-cache-v1")
-    updateIRFiles(digest, "compiler-ir", compilerIR)
+    digest.updateString("scala3-sjs-macro-relink-cache-v2")
+    digest.updateString("compiler-ir-fingerprint")
+    digest.updateString(compilerIRFingerprint)
     updateIRFiles(digest, "macro-entrypoints-ir", entryPointsIR)
     updateIRFiles(digest, "macro-implementation-ir", macroImplementationIR)
     updateStrings(digest, "linker-config", linkerConfig.sorted)

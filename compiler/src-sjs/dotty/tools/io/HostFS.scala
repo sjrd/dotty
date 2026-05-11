@@ -5,7 +5,7 @@ import scala.language.unsafeNulls
 
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSGlobal
-import scala.scalajs.js.typedarray.{ArrayBuffer, Uint8Array}
+import scala.scalajs.js.typedarray.Uint8Array
 import scala.util.control.NonFatal
 
 /** Small host filesystem bridge used by the Scala.js compiler build.
@@ -29,12 +29,6 @@ private[io] object HostFS:
   private def readGlobal(name: String): js.Dynamic | Null =
     val value = GlobalThis.asInstanceOf[js.Dynamic].selectDynamic(name)
     if defined(value) then value else null
-
-  private def asInt(value: js.Any): Int =
-    js.typeOf(value) match
-      case "number" => value.asInstanceOf[Double].toInt
-      case "string" => value.asInstanceOf[String].toIntOption.getOrElse(0)
-      case _        => 0
 
   private def asLong(value: js.Any): Long =
     js.typeOf(value) match
@@ -175,48 +169,13 @@ private[io] object HostFS:
       catch
         case NonFatal(_) => Nil
 
-  private def toUint8Array(bytes: Array[Byte]): Uint8Array =
-    val arr = new Uint8Array(bytes.length)
-    var i = 0
-    while i < bytes.length do
-      arr(i) = (bytes(i) & 0xff).toShort
-      i += 1
-    arr
-
-  private def fromUint8Array(arr: Uint8Array): Array[Byte] =
-    val out = new Array[Byte](arr.length)
-    var i = 0
-    while i < arr.length do
-      out(i) = arr(i).toByte
-      i += 1
-    out
-
-  private def toBytes(value: js.Any): Array[Byte] = value match
-    case arr: Uint8Array =>
-      fromUint8Array(arr)
-    case _ =>
-      val dyn = value.asInstanceOf[js.Dynamic]
-      val buffer = dyn.selectDynamic("buffer")
-      if defined(buffer) then
-        val offset = asInt(dyn.selectDynamic("byteOffset").asInstanceOf[js.Any])
-        val length = asInt(dyn.selectDynamic("byteLength").asInstanceOf[js.Any])
-        fromUint8Array(new Uint8Array(buffer.asInstanceOf[ArrayBuffer], offset, length))
-      else
-        val length = asInt(dyn.selectDynamic("length").asInstanceOf[js.Any])
-        val out = new Array[Byte](length)
-        var i = 0
-        while i < length do
-          out(i) = asInt(dyn.apply(i).asInstanceOf[js.Any]).toByte
-          i += 1
-        out
-
   def readBytes(path: String): Option[Array[Byte]] =
     val readFileSync = method(activeFs, "readFileSync")
     if readFileSync == null then None
     else
       try
         val content = readFileSync.asInstanceOf[js.Function1[String, js.Any]](path)
-        Some(toBytes(content))
+        Some(JSByteArrays.toByteArray(content))
       catch
         case NonFatal(_) => None
 
@@ -267,16 +226,16 @@ private[io] object HostFS:
         if append then
           val appendFileSync = method(activeFs, "appendFileSync")
           if appendFileSync != null then
-            appendFileSync.asInstanceOf[js.Function2[String, Uint8Array, js.Any]](path, toUint8Array(bytes))
+            appendFileSync.asInstanceOf[js.Function2[String, Uint8Array, js.Any]](path, JSByteArrays.toUint8Array(bytes))
           else
             val merged = readBytes(path).getOrElse(Array.emptyByteArray) ++ bytes
             val writeFileSync = method(activeFs, "writeFileSync")
             if writeFileSync == null then return false
-            writeFileSync.asInstanceOf[js.Function2[String, Uint8Array, js.Any]](path, toUint8Array(merged))
+            writeFileSync.asInstanceOf[js.Function2[String, Uint8Array, js.Any]](path, JSByteArrays.toUint8Array(merged))
         else
           val writeFileSync = method(activeFs, "writeFileSync")
           if writeFileSync == null then return false
-          writeFileSync.asInstanceOf[js.Function2[String, Uint8Array, js.Any]](path, toUint8Array(bytes))
+          writeFileSync.asInstanceOf[js.Function2[String, Uint8Array, js.Any]](path, JSByteArrays.toUint8Array(bytes))
         true
       catch
         case NonFatal(_) => false

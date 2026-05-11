@@ -93,9 +93,13 @@ textarea {
 }
 
 .compile-timer {
+  flex: 1 1 auto;
   color: #b5b5b5;
   font-size: 13px;
   margin-right: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

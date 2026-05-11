@@ -4,10 +4,10 @@ package dotc
 import dotty.tools.dotc.sjsmacros.{MacroRuntimeExports, MacroRuntimeRegistry, MissingMacroEntryPointException}
 import dotty.tools.dotc.sjsmacros.host.SjsBrowserMacroLinker
 import dotty.tools.dotc.core.MacroClassPathScanner
+import dotty.tools.io.JSByteArrays
 import scala.scalajs.js
 import scala.scalajs.js.annotation.{JSGlobal, JSExportTopLevel}
 import scala.scalajs.js.JSConverters.*
-import scala.scalajs.js.typedarray.Uint8Array
 import scala.scalajs.js.wasm.JSPI.allowOrphanJSAwait
 import scala.collection.mutable
 import scala.util.control.NonFatal
@@ -29,8 +29,7 @@ object MainJS extends JSDriver:
       runImpl(args.toArray)
     }
 
-  @JSExportTopLevel("runScala3CompilerSJSWithMacroLinkingAsync")
-  def runWithMacroLinkingAsync(args: js.Array[String], relink: js.Function1[js.Dynamic, js.Any]): js.Promise[Int] =
+  private def runWithMacroLinkingAsync(args: js.Array[String], relink: js.Function1[js.Dynamic, js.Any]): js.Promise[Int] =
     runWithMacroLinkingAsyncWithLimit(args, relink, DefaultMaxMacroLinkRestarts)
 
   @JSExportTopLevel("runScala3CompilerSJSWithBrowserMacroLinkingAsync")
@@ -44,14 +43,6 @@ object MainJS extends JSDriver:
     js.async {
       try runWithMacroLinkingImpl(args.toArray, relink, maxRestarts)
       finally clearPublicModuleUrls()
-    }
-
-  @JSExportTopLevel("emitScala3CompilerSJSMacroEntryPointsIRAsync")
-  def emitMacroEntryPointsIRAsync(args: js.Array[String], packageNames: js.Array[String]): js.Promise[js.Array[js.Dynamic]] =
-    js.async {
-      emitMacroEntryPointsIRImpl(args.toArray, packageNames.toArray.toSeq)
-        .map(toJSMacroEntryPointsIR)
-        .toJSArray
     }
 
   override def main(args: Array[String]): Unit =
@@ -113,22 +104,16 @@ object MainJS extends JSDriver:
     js.Dynamic.literal(
       packageName = entry.packageName,
       path = entry.path,
-      bytes = toUint8Array(entry.bytes),
+      bytes = JSByteArrays.toUint8Array(entry.bytes),
     )
-
-  private def toUint8Array(bytes: Array[Byte]): Uint8Array =
-    val arr = new Uint8Array(bytes.length)
-    var i = 0
-    while i < bytes.length do
-      arr(i) = (bytes(i) & 0xff).toShort
-      i += 1
-    arr
 
   private def runWithMacroLinkingImpl(args: Array[String], relink: js.Function1[js.Dynamic, js.Any], remainingRestarts: Int): Int =
     val code = runImpl(args)
     if code != MissingMacroEntryPointExitCode then code
     else if remainingRestarts <= 0 then
-      throw js.JavaScriptException(s"exceeded maximum Scala.js macro relink restarts while resolving ${lastMissingMacroEntryPointIds}")
+      val missing = lastMissingMacroEntryPointsOrNull
+      val ids = if missing == null then "unknown macro entry points" else missing.ids.mkString(", ")
+      throw js.JavaScriptException(s"exceeded maximum Scala.js macro relink restarts while resolving $ids")
     else
       val missing = lastMissingMacroEntryPointsOrNull
       if missing == null then
@@ -148,18 +133,11 @@ object MainJS extends JSDriver:
       val linkedCompiler = linkedCompilerFromRelinkResult(awaitMaybePromise(relink(request)))
       restartWithLinkedCompiler(linkedCompiler, args, relink, remainingRestarts - 1)
 
-  private def lastMissingMacroEntryPointIds: String | Null =
-    val missing = lastMissingMacroEntryPointsOrNull
-    if missing == null then null else missing.ids.mkString(", ")
-
-  private def registerMacroEntryPoint(id: String, f: js.Function1[js.Array[js.Any], js.Any]): Unit =
-    MacroRuntimeRegistry.register(id, args => f(args.map(_.asInstanceOf[js.Any]).toJSArray))
-
   private def registerMacroEntryPoints(entries: js.Array[js.Array[js.Any]]): Unit =
     entries.foreach { entry =>
       val id = entry(0).asInstanceOf[String]
       val f = entry(1).asInstanceOf[js.Function1[js.Array[js.Any], js.Any]]
-      registerMacroEntryPoint(id, f)
+      MacroRuntimeRegistry.register(id, args => f(args.map(_.asInstanceOf[js.Any]).toJSArray))
     }
 
   private def awaitMaybePromise(value: js.Any): js.Any =
