@@ -635,15 +635,19 @@ jobs:
         with:
           node-version: '24.x'
       - uses: sbt/setup-sbt@v1
+      - name: Set up Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
       - name: Install scala3-compiler-sjs Node dependencies
         working-directory: compiler
         run: npm ci
       - name: Scala.js compiler tests
         run: ./project/scripts/sbt "sjsCompilerTests/test"
-      - name: scala3-compiler-sjs hello world test
+      - name: scala3-compiler-sjs validation test
         env:
           SBT_OPTS: -Xmx1400m -Xms256m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError
-        run: ./project/scripts/sbt "scala3-compiler-sjs/Compile/sjsHelloWorldTest"
+          CHROME_BIN: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: ./project/scripts/sbt "scala3-compiler-sjs/Compile/sjsCompilerValidationTest"
       - name: Scala.js sandbox
         run: ./project/scripts/sbt ";sjsSandbox/run ;sjsSandbox/test"
       - name: Scala.js JUnit tests

@@ -93,14 +93,97 @@ textarea {
 }
 
 .compile-timer {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
   flex: 1 1 auto;
   color: #b5b5b5;
   font-size: 13px;
   margin-right: auto;
   min-width: 0;
+}
+
+.compile-timer[hidden] {
+  display: none;
+}
+
+.compile-timer-summary {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.compile-timer-details {
+  border-color: #3a3a3a;
+  background: #202020;
+  color: #dcdcdc;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+}
+
+.compile-timer-tooltip {
+  background: #151515;
+  border: 1px solid #3a3a3a;
+  box-shadow: 0 10px 24px #00000066;
+  color: #eeeeee;
+  display: none;
+  font-size: 12px;
+  max-height: min(320px, 70vh);
+  width: min(560px, calc(100vw - 32px));
+  overflow: auto;
+  padding: 10px;
+  pointer-events: none;
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 100;
+}
+
+.compile-timer-tooltip.is-visible {
+  display: block;
+}
+
+.compile-timer-tooltip.is-pinned {
+  pointer-events: auto;
+}
+
+.compile-timer-tooltip[hidden] {
+  display: none !important;
+}
+
+.compile-timer-detail {
+  column-gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  padding: 2px 0 2px calc(var(--level, 0) * 16px);
+}
+
+.compile-timer-detail.is-total {
+  border-bottom: 1px solid #2d2d2d;
+  color: #ffffff;
+  font-weight: 600;
+  margin-bottom: 4px;
+  padding-bottom: 6px;
+}
+
+.compile-timer-detail.is-group {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.compile-timer-detail-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compile-timer-detail-duration {
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+  padding-left: 8px;
+  text-align: right;
 }
 
 select,

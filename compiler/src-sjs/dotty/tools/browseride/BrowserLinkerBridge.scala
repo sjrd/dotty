@@ -6,7 +6,6 @@ import scala.concurrent.ExecutionContext
 import scala.scalajs.concurrent.JSExecutionContext
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters.*
-import scala.scalajs.js.annotation.JSExportTopLevel
 import scala.scalajs.js.typedarray.Uint8Array
 
 import dotty.tools.io.JSByteArrays
@@ -20,7 +19,9 @@ import org.scalajs.logging.NullLogger
 object BrowserLinkerBridge:
   private given ExecutionContext = JSExecutionContext.queue
   private val baseConfig = StandardConfig()
-    .withCheckIR(true)
+    .withCheckIR(false)
+    .withSemantics(_.optimized)
+    .withMinify(false)
     .withBatchMode(true)
     .withSourceMap(false)
     .withModuleKind(ModuleKind.ESModule)
@@ -35,15 +36,12 @@ object BrowserLinkerBridge:
   def irInput(path: String, bytes: Uint8Array): IRInput =
     js.Dynamic.literal(path = path, bytes = bytes).asInstanceOf[IRInput]
 
-  @JSExportTopLevel("linkScalaJSAsync")
   def linkAsync(irFiles: js.Array[IRInput], mainClassName: String): js.Promise[js.Object] =
     link(irFiles, Seq(ModuleInitializer.mainMethodWithArgs(mainClassName, "main", Nil)))
 
-  @JSExportTopLevel("linkScalaJSModuleAsync")
   def linkModuleAsync(irFiles: js.Array[IRInput]): js.Promise[js.Object] =
     link(irFiles, Nil)
 
-  @JSExportTopLevel("linkScalaJSCompilerModuleAsync")
   def linkCompilerModuleAsync(irFiles: js.Array[IRInput]): js.Promise[js.Object] =
     link(irFiles, Nil, compilerModuleConfig)
 

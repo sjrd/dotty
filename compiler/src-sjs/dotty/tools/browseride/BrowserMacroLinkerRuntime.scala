@@ -3,7 +3,6 @@ package dotty.tools.browseride
 import scala.collection.mutable
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters.*
-import scala.scalajs.js.annotation.JSExportTopLevel
 import scala.scalajs.js.typedarray.Uint8Array
 import scala.util.control.NonFatal
 
@@ -11,12 +10,11 @@ import dotty.tools.dotc.sjsmacros.host.SjsMacroBrowserGlobals
 import dotty.tools.sjs.JSInterop.{isDefined, stringOr}
 
 object BrowserMacroLinkerRuntime:
-  private val MacroLinkCacheDB = "scala-browser-ide-macro-link-cache"
-  private val MacroLinkCacheStore = "linked-compilers"
   private val CompilerJSZipImport = """import * as importedjszip from "jszip";"""
   private val CompilerLoaderImport = """import { load as __load } from "./__loader.js";"""
-
-  private var dbPromise: Option[js.Promise[Option[js.Dynamic]]] = None
+  // Stable, cheap fingerprint for browser macro compiler IR cache keys.
+  private val Fnv64OffsetBasis = -3750763034362895579L
+  private val Fnv64Prime = 1099511628211L
 
   trait Config extends js.Object:
     val compilerIRBytes: js.Function0[js.Promise[Uint8Array]]
@@ -25,7 +23,6 @@ object BrowserMacroLinkerRuntime:
     val recordTiming: js.Function2[String, Double, Unit]
     val jszipWrapperUrl: String
 
-  @JSExportTopLevel("installScala3BrowserMacroLinkerAsync")
   def install(config: Config): js.Promise[Unit] =
     config.compilerIRBytes().`then`[Unit] { compilerIRBytes =>
       val compilerIRFingerprint = timed(config, "compiler IR fingerprint")(bytesFingerprint(compilerIRBytes))
@@ -47,25 +44,16 @@ object BrowserMacroLinkerRuntime:
         case Some(linkedCompiler) =>
           js.Promise.resolve(linkedCompiler)
         case None =>
-          readPersistedLinkedCompiler(cacheKey).`then`[js.Dynamic] {
-            case Some(persistedLinkResult) =>
-              val linkedCompiler = timed(config, "macro compiler import")(materializeLinkedCompilerModule(persistedLinkResult))
+          config.compilerIRFiles().`then`[js.Dynamic] { compilerIRFiles =>
+            val allIRFiles =
+              (compilerIRFiles.toSeq ++
+                irInputArray(request.selectDynamic("entryPointsIR")) ++
+                irInputArray(request.selectDynamic("macroImplementationIR"))).toJSArray
+            timedPromise(config, "macro compiler link")(config.linkCompilerModule(allIRFiles)).`then`[js.Dynamic] { linkResult =>
+              val linkedCompiler = timed(config, "macro compiler import")(materializeLinkedCompilerModule(linkResult))
               linkedCompilerCache(cacheKey) = linkedCompiler
               linkedCompiler
-            case None =>
-              config.compilerIRFiles().`then`[js.Dynamic] { compilerIRFiles =>
-                val allIRFiles =
-                  (compilerIRFiles.toSeq ++
-                    irInputArray(request.selectDynamic("entryPointsIR")) ++
-                    irInputArray(request.selectDynamic("macroImplementationIR"))).toJSArray
-                timedPromise(config, "macro compiler link")(config.linkCompilerModule(allIRFiles)).`then`[js.Dynamic] { linkResult =>
-                  val cacheableCompiler = cacheableLinkResult(linkResult)
-                  val linkedCompiler = timed(config, "macro compiler import")(materializeLinkedCompilerModule(cacheableCompiler))
-                  linkedCompilerCache(cacheKey) = linkedCompiler
-                  writePersistedLinkedCompiler(cacheKey, cacheableCompiler)
-                  linkedCompiler
-                }
-              }
+            }
           }
 
     private def materializeLinkedCompilerModule(linkResult: js.Dynamic): js.Dynamic =
@@ -99,89 +87,6 @@ object BrowserMacroLinkerRuntime:
         s"import * as importedjszip from ${js.JSON.stringify(config.jszipWrapperUrl)};",
       )
 
-  private def cacheableLinkResult(linkResult: js.Dynamic): js.Dynamic =
-    val normalizedFiles = linkResultFiles(linkResult).map { file =>
-      js.Dynamic.literal(
-        path = file.selectDynamic("path").toString,
-        bytes = fileBytes(file),
-      )
-    }
-
-    val result = js.Dynamic.literal(
-      code = if normalizedFiles.isEmpty then stringOr(linkResult.selectDynamic("code"), "") else "",
-      files = normalizedFiles.toJSArray,
-    )
-    val jsFileName = linkResult.selectDynamic("jsFileName")
-    if isDefined(jsFileName) then
-      result.updateDynamic("jsFileName")(jsFileName.toString)
-    result
-
-  private def readPersistedLinkedCompiler(cacheKey: String): js.Promise[Option[js.Dynamic]] =
-    openMacroLinkCacheDB().`then`[Option[js.Dynamic]] {
-      case Some(db) =>
-        try
-          val transaction = db.asInstanceOf[js.Dynamic].transaction(MacroLinkCacheStore, "readonly")
-          idbRequest(transaction.objectStore(MacroLinkCacheStore).get(cacheKey)).`then`[Option[js.Dynamic]] { record =>
-            if !isDefined(record) then None
-            else
-              val linkResult = record.asInstanceOf[js.Dynamic].selectDynamic("linkResult")
-              Option.when(isDefined(linkResult))(linkResult.asInstanceOf[js.Dynamic])
-          }
-        catch
-          case NonFatal(_) => None
-      case None => None
-    }
-
-  private def writePersistedLinkedCompiler(cacheKey: String, linkResult: js.Dynamic): Unit =
-    openMacroLinkCacheDB().`then`[Unit] { db =>
-      try
-        db.foreach { db =>
-          val transaction = db.transaction(MacroLinkCacheStore, "readwrite")
-          idbRequest(transaction.objectStore(MacroLinkCacheStore).put(js.Dynamic.literal(
-            cacheKey = cacheKey,
-            linkResult = linkResult,
-          )))
-          ()
-        }
-      catch case NonFatal(_) => ()
-    }
-    ()
-
-  private def openMacroLinkCacheDB(): js.Promise[Option[js.Dynamic]] =
-    val indexedDB = BrowserJS.global.selectDynamic("indexedDB")
-    if !isDefined(indexedDB) then js.Promise.resolve(None)
-    else
-      dbPromise.getOrElse {
-        val opened = new js.Promise[Option[js.Dynamic]]((resolve, _) =>
-          val request = indexedDB.open(MacroLinkCacheDB)
-          request.updateDynamic("onupgradeneeded") { (_: js.Any) =>
-            request.selectDynamic("result").createObjectStore(
-              MacroLinkCacheStore,
-              js.Dynamic.literal(keyPath = "cacheKey"),
-            )
-          }
-          request.updateDynamic("onsuccess") { (_: js.Any) =>
-            resolve(Some(request.selectDynamic("result").asInstanceOf[js.Dynamic]))
-          }
-          request.updateDynamic("onerror") { (_: js.Any) =>
-            resolve(None)
-          }
-        )
-        dbPromise = Some(opened)
-        opened
-      }
-
-  private def idbRequest(request: js.Dynamic): js.Promise[js.Any] =
-    new js.Promise[js.Any]((resolve, reject) =>
-      request.updateDynamic("onsuccess") { (_: js.Any) =>
-        resolve(request.selectDynamic("result"))
-      }
-      request.updateDynamic("onerror") { (_: js.Any) =>
-        val error = request.selectDynamic("error")
-        reject(if isDefined(error) then error else "IndexedDB request failed")
-      }
-    )
-
   private def timed[A](config: Config, name: String)(operation: => A): A =
     val startedAt = js.Date.now()
     try operation
@@ -206,11 +111,11 @@ object BrowserMacroLinkerRuntime:
         js.Promise.reject(t.asInstanceOf[js.Any])
 
   private def bytesFingerprint(bytes: Uint8Array): String =
-    var hash = -3750763034362895579L
+    var hash = Fnv64OffsetBasis
     var i = 0
     while i < bytes.length do
       hash ^= bytes(i).toLong & 0xffL
-      hash *= 1099511628211L
+      hash *= Fnv64Prime
       i += 1
     s"${bytes.byteLength}:${java.lang.Long.toHexString(hash)}"
 

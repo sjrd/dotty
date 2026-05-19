@@ -25,7 +25,11 @@
           <option value="multi">Multiple Files</option>
           <option value="authorMacro">Author Macro</option>
         </select>
-        <span id="compile-timer" class="compile-timer" aria-live="polite" hidden></span>
+        <div id="compile-timer" class="compile-timer" hidden>
+          <span id="compile-timer-summary" class="compile-timer-summary" aria-live="polite"></span>
+          <button id="compile-timer-details" class="compile-timer-details" type="button" aria-controls="compile-timer-tooltip" aria-expanded="false" hidden>Details</button>
+          <div id="compile-timer-tooltip" class="compile-timer-tooltip" role="dialog" aria-label="Compile timing details" hidden></div>
+        </div>
         <input id="import-macro-input" type="file" accept=".jar,.zip" multiple hidden>
         <button id="import-macro-button" type="button" disabled>Import Macro</button>
         <button id="run-button" type="button" disabled>Run</button>

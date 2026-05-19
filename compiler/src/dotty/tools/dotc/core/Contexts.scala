@@ -931,6 +931,12 @@ object Contexts {
     /** The platform, initialized by `initPlatform()`. */
     private var _platform: Platform | Null = uninitialized
 
+    /** Whether this context base should keep its platform between compiler runs.
+     *  Browser compiler sessions use this to retain the resolved Scala.js
+     *  classpath without enabling the broader Interactive mode.
+     */
+    private[dotc] var retainPlatformBetweenRuns: Boolean = false
+
     /** The platform */
     def platform: Platform = {
       val p = _platform
@@ -961,7 +967,7 @@ object Contexts {
       // This is important because :dep/:jar commands add JARs to the platform's classpath,
       // and we must not lose those when a new Run is created for each input.
       // In non-interactive mode, always create a fresh platform to preserve original behavior.
-      if _platform == null || !ctx.mode.is(Mode.Interactive) then
+      if _platform == null || !(ctx.mode.is(Mode.Interactive) || retainPlatformBetweenRuns) then
         _platform = newPlatform
       platform.init()
       definitions.init()

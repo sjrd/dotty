@@ -62,6 +62,9 @@ const filePathEl = document.querySelector("#file-path");
 const addFileButton = document.querySelector("#add-file-button");
 const deleteFileButton = document.querySelector("#delete-file-button");
 const compileTimerEl = document.querySelector("#compile-timer");
+const compileTimerSummaryEl = document.querySelector("#compile-timer-summary");
+const compileTimerDetailsEl = document.querySelector("#compile-timer-details");
+const compileTimerTooltipEl = document.querySelector("#compile-timer-tooltip");
 const importMacroButton = document.querySelector("#import-macro-button");
 const importMacroInput = document.querySelector("#import-macro-input");
 const terminalForm = document.querySelector("#terminal-form");
@@ -77,6 +80,9 @@ let runtimeBlocked = false;
 let nextFileId = 0;
 let files = [];
 let currentFileId = null;
+let compileTimerDetailsPinned = false;
+let compileTimerDetailsHovered = false;
+let compileTimerDetailsHideTimer = 0;
 
 function newFile(path, content = "") {
   nextFileId += 1;
@@ -91,9 +97,180 @@ function currentFile() {
   return files.find((file) => file.id === currentFileId) ?? files[0] ?? null;
 }
 
-function setCompileTimer(text) {
-  compileTimerEl.textContent = text;
+function setCompileTimer(text, details = []) {
+  compileTimerSummaryEl.textContent = text;
   compileTimerEl.hidden = text === "";
+  renderTimingDetails(details);
+}
+
+function renderTimingDetails(details) {
+  compileTimerTooltipEl.replaceChildren();
+  compileTimerDetailsPinned = false;
+  compileTimerDetailsHovered = false;
+  clearTimeout(compileTimerDetailsHideTimer);
+
+  const hasDetails = details.length > 0;
+  compileTimerDetailsEl.hidden = !hasDetails;
+  compileTimerTooltipEl.hidden = true;
+  compileTimerDetailsEl.setAttribute("aria-expanded", "false");
+  compileTimerTooltipEl.setAttribute("aria-hidden", "true");
+  compileTimerTooltipEl.classList.remove("is-visible", "is-pinned");
+
+  for (const detail of details) {
+    const row = document.createElement("div");
+    row.className = "compile-timer-detail";
+    if (detail.kind) {
+      row.classList.add(`is-${detail.kind}`);
+    }
+    row.style.setProperty("--level", String(detail.level ?? 0));
+
+    const name = document.createElement("span");
+    name.className = "compile-timer-detail-name";
+    name.textContent = detail.name;
+
+    const duration = document.createElement("span");
+    duration.className = "compile-timer-detail-duration";
+    duration.textContent = ` ${detail.durationText}`;
+
+    row.append(name, duration);
+    compileTimerTooltipEl.append(row);
+  }
+}
+
+function timingRow(name, durationMs, level, kind = "") {
+  return {
+    name,
+    durationMs,
+    durationText: formatDuration(durationMs),
+    level,
+    kind,
+  };
+}
+
+function timingIndex(entries) {
+  return new Map(entries.map((entry) => [entry.name, entry]));
+}
+
+function compilerRunIndex(name) {
+  const match = /^compiler run(?: (\d+))?$/.exec(name);
+  return match ? Number(match[1] ?? 1) : Number.POSITIVE_INFINITY;
+}
+
+function setupNameForRun(runName) {
+  const match = /^compiler run(?: (\d+))?$/.exec(runName);
+  return match?.[1] ? `compiler setup ${match[1]}` : "compiler setup";
+}
+
+function appendCompilerRun(rows, entriesByName, run, level) {
+  rows.push({ ...run, level, kind: "group" });
+  const setup = entriesByName.get(setupNameForRun(run.name));
+  if (setup) {
+    rows.push({ ...setup, level: level + 1 });
+  }
+}
+
+function buildTimingDetails(message, totalDurationText) {
+  const entries = [...(message.phases ?? [])]
+    .map((phase) => ({
+      name: String(phase.name ?? ""),
+      durationMs: Number(phase.durationMs),
+      durationText: formatDuration(phase.durationMs),
+      level: 0,
+    }))
+    .filter((phase) => phase.name && phase.durationText);
+  if (entries.length === 0) {
+    return [];
+  }
+
+  const entriesByName = timingIndex(entries);
+  const rows = [{ name: "total / Ready in", durationText: totalDurationText, level: 0, kind: "total" }];
+  const topLevelNames = ["compile", "runtime IR", "program link", "program import"];
+  const compile = entriesByName.get("compile");
+  const compilerRuns = entries
+    .filter((entry) => /^compiler run(?: \d+)?$/.test(entry.name))
+    .sort((left, right) => compilerRunIndex(left.name) - compilerRunIndex(right.name));
+  const macroRestartEntries = entries.filter((entry) => /^macro compiler restart(?: \d+)?$/.test(entry.name));
+  const phaseEntries = entries.filter((entry) => entry.name.startsWith("phase: "));
+
+  if (compile) {
+    rows.push({ ...compile, level: 1, kind: "group" });
+    for (const name of ["macro assets", "macro entrypoint IR", "macro compiler link", "macro compiler import"]) {
+      const entry = entriesByName.get(name);
+      if (entry) {
+        rows.push({ ...entry, level: 2 });
+      }
+    }
+
+    const restartByIndex = new Map(
+      macroRestartEntries.map((entry) => [Number(/^macro compiler restart(?: (\d+))?$/.exec(entry.name)?.[1] ?? 1), entry])
+    );
+    for (const run of compilerRuns) {
+      const index = compilerRunIndex(run.name);
+      const restart = restartByIndex.get(index - 1);
+      if (restart) {
+        rows.push({ ...restart, level: 2, kind: "group" });
+        appendCompilerRun(rows, entriesByName, run, 3);
+      } else {
+        appendCompilerRun(rows, entriesByName, run, 2);
+      }
+    }
+
+    if (phaseEntries.length > 0) {
+      const phaseLevel = compilerRuns.length === 1 ? 3 : 2;
+      const phaseGroupName = compilerRuns.length === 1 ? "reported compiler phases" : "reported compiler phases (all runs)";
+      const phaseDurationMs = phaseEntries.reduce((sum, entry) => sum + entry.durationMs, 0);
+      rows.push(timingRow(phaseGroupName, phaseDurationMs, phaseLevel, "group"));
+      rows.push(...phaseEntries.map((entry) => ({ ...entry, level: phaseLevel + 1 })));
+    }
+  }
+
+  for (const name of topLevelNames.filter((name) => name !== "compile")) {
+    const entry = entriesByName.get(name);
+    if (entry) {
+      rows.push({ ...entry, level: 1, kind: "group" });
+    }
+  }
+
+  const topLevelDurationMs = topLevelNames.reduce((sum, name) => sum + (entriesByName.get(name)?.durationMs ?? 0), 0);
+  const notItemizedMs = Number(message.durationMs) - topLevelDurationMs;
+  if (notItemizedMs >= 1) {
+    rows.push(timingRow("not itemized / browser overhead", notItemizedMs, 1));
+  }
+
+  return rows;
+}
+
+function positionTimingDetailsDialog() {
+  const gap = 8;
+  const margin = 8;
+  const buttonRect = compileTimerDetailsEl.getBoundingClientRect();
+  const dialogRect = compileTimerTooltipEl.getBoundingClientRect();
+  const maxLeft = window.innerWidth - dialogRect.width - margin;
+  const maxTop = window.innerHeight - dialogRect.height - margin;
+
+  let left = buttonRect.right + gap;
+  if (left > maxLeft) {
+    left = buttonRect.left - dialogRect.width - gap;
+  }
+  left = Math.min(Math.max(left, margin), Math.max(maxLeft, margin));
+
+  const centeredTop = buttonRect.top + (buttonRect.height - dialogRect.height) / 2;
+  const top = Math.min(Math.max(centeredTop, margin), Math.max(maxTop, margin));
+
+  compileTimerTooltipEl.style.left = `${left}px`;
+  compileTimerTooltipEl.style.top = `${top}px`;
+}
+
+function updateTimingDetailsVisibility() {
+  const visible = !compileTimerDetailsEl.hidden && (compileTimerDetailsPinned || compileTimerDetailsHovered);
+  compileTimerTooltipEl.classList.toggle("is-visible", visible);
+  compileTimerTooltipEl.classList.toggle("is-pinned", compileTimerDetailsPinned);
+  compileTimerTooltipEl.hidden = !visible;
+  if (visible) {
+    positionTimingDetailsDialog();
+  }
+  compileTimerDetailsEl.setAttribute("aria-expanded", String(visible));
+  compileTimerTooltipEl.setAttribute("aria-hidden", String(!visible));
 }
 
 function formatDuration(milliseconds) {
@@ -110,16 +287,10 @@ function formatDuration(milliseconds) {
 function formatTimingSummary(message) {
   const durationText = formatDuration(message.durationMs);
   if (!durationText) {
-    return "";
+    return { text: "", details: [] };
   }
 
-  const topPhases = [...(message.phases ?? [])]
-    .filter((phase) => phase.name && phase.durationMs >= 1)
-    .sort((left, right) => right.durationMs - left.durationMs)
-    .slice(0, 3)
-    .map((phase) => `${phase.name} ${formatDuration(phase.durationMs)}`);
-  const details = topPhases.length > 0 ? ` · ${topPhases.join(" · ")}` : "";
-  return `Ready in ${durationText}${details}`;
+  return { text: `Ready in ${durationText}`, details: buildTimingDetails(message, durationText) };
 }
 
 function normalizePathForDisplay(path) {
@@ -149,6 +320,32 @@ function uniquePath(basePath) {
   }
   return `${prefix}${index}${suffix}`;
 }
+
+compileTimerDetailsEl.addEventListener("mouseenter", () => {
+  clearTimeout(compileTimerDetailsHideTimer);
+  compileTimerDetailsHovered = true;
+  updateTimingDetailsVisibility();
+});
+
+compileTimerDetailsEl.addEventListener("mouseleave", () => {
+  clearTimeout(compileTimerDetailsHideTimer);
+  compileTimerDetailsHideTimer = setTimeout(() => {
+    compileTimerDetailsHovered = false;
+    updateTimingDetailsVisibility();
+  }, 120);
+});
+
+compileTimerDetailsEl.addEventListener("click", () => {
+  clearTimeout(compileTimerDetailsHideTimer);
+  compileTimerDetailsPinned = !compileTimerDetailsPinned;
+  updateTimingDetailsVisibility();
+});
+
+window.addEventListener("resize", () => {
+  if (!compileTimerTooltipEl.hidden) {
+    positionTimingDetailsDialog();
+  }
+});
 
 function syncCurrentFile() {
   const file = currentFile();
@@ -284,11 +481,11 @@ function setTerminalInputVisible(visible) {
 function updateButtonState() {
   const idleState = ready ? "ready" : runtimeBlocked ? "blocked" : "loading";
 
-  runButton.disabled = !ready || running;
-  exampleSelectEl.disabled = running;
-  filePathEl.disabled = running;
-  addFileButton.disabled = running;
-  deleteFileButton.disabled = running || files.length <= 1;
+  runButton.disabled = !ready || running || importingMacro;
+  exampleSelectEl.disabled = running || importingMacro;
+  filePathEl.disabled = running || importingMacro;
+  addFileButton.disabled = running || importingMacro;
+  deleteFileButton.disabled = running || importingMacro || files.length <= 1;
   importMacroButton.disabled = !ready || running || importingMacro;
   runButton.dataset.state = running ? "loading" : idleState;
   importMacroButton.dataset.state = importingMacro ? "loading" : idleState;
@@ -455,7 +652,7 @@ worker.addEventListener("message", (event) => {
       waitingForInput = false;
       runtimeBlocked = false;
       setTerminalInputVisible(false);
-      if (compileTimerEl.textContent === "Compiling...") {
+      if (compileTimerSummaryEl.textContent === "Compiling...") {
         setCompileTimer("");
       }
       updateButtonState();
@@ -464,7 +661,8 @@ worker.addEventListener("message", (event) => {
 
     case "compile-duration":
       {
-        setCompileTimer(formatTimingSummary(message));
+        const timing = formatTimingSummary(message);
+        setCompileTimer(timing.text, timing.details);
       }
       break;
 

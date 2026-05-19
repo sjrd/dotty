@@ -11,7 +11,7 @@ import scala.util.control.NonFatal
 import dotty.tools.dotc.MainJS
 import dotty.tools.dotc.sjsmacros.host.SjsMacroBrowserGlobals
 import dotty.tools.io.JSByteArrays
-import dotty.tools.sjs.JSInterop.{dynamicArray, intValue, isDefined, stringOr}
+import dotty.tools.sjs.JSInterop.{dynamicArray, isDefined, stringOr}
 
 object BrowserIDEWorker:
   private val SourceRoot = "/workspace/src"
@@ -58,6 +58,7 @@ object BrowserIDEWorker:
       macroClasspath: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty,
       importedMacroArtifacts: mutable.ArrayBuffer[js.Dynamic] = mutable.ArrayBuffer.empty,
       var dynamicMacroArtifacts: Seq[js.Dynamic] = Nil,
+      var retainedMacroRuntimeKey: String = "",
       var browserMacroRuntimeReady: Boolean = false,
       var activeTimings: Option[mutable.Map[String, Double]] = None,
   )
@@ -203,39 +204,42 @@ object BrowserIDEWorker:
 
     private def importMacroArtifact(value: js.Any): js.Promise[String] =
       ensureRuntime().`then`[String] { runtime =>
-        val normalizedFiles = dynamicArray(value).map { file =>
+        val files = dynamicArray(value).map { file =>
           js.Dynamic.literal(
             name = safeAssetName(stringOr(file.selectDynamic("name"), "")),
             bytes = JSByteArrays.uint8ArrayOrEmpty(file.selectDynamic("bytes")),
           )
         }
-        val jarFiles = normalizedFiles.filter(file => file.selectDynamic("name").toString.toLowerCase.endsWith(".jar"))
-        val irZipFiles = normalizedFiles.filter { file =>
+        val jars = files.filter(_.selectDynamic("name").toString.toLowerCase.endsWith(".jar"))
+        val irZips = files.filter { file =>
           val name = file.selectDynamic("name").toString.toLowerCase
           name.endsWith(".zip") && !name.endsWith(".jar")
         }
-        if irZipFiles.isEmpty then throw js.JavaScriptException("Select a Scala.js macro implementation IR .zip file.")
+        if irZips.isEmpty then
+          throw js.JavaScriptException("Select a Scala.js macro implementation IR .zip file.")
 
         importedMacroArtifactCounter += 1
-        val baseId = safeAssetName(irZipFiles.head.selectDynamic("name").toString.replaceAll("(?i)(?:-sjsir)?\\.zip$", ""))
+        val baseId = safeAssetName(irZips.head.selectDynamic("name").toString.replaceAll("(?i)(?:-sjsir)?\\.zip$", ""))
         val id = s"$baseId-$importedMacroArtifactCounter"
         val classpathRoot = s"$ImportedMacroRoot/$id/classpath"
-        val classpathEntries = mutable.ArrayBuffer.empty[String]
-        readAllZippedIRFiles(irZipFiles.toSeq).`then`[String] { implementationIR =>
+        readAllZippedIRFiles(irZips.toSeq).`then`[String] { implementationIR =>
           if implementationIR.isEmpty then
             throw js.JavaScriptException("The selected macro implementation zip does not contain any .sjsir files.")
 
           runtime.fs.mkdir(classpathRoot)
-          for file <- jarFiles do
+          val classpathEntries = jars.map { file =>
             val path = s"$classpathRoot/${file.selectDynamic("name")}"
             runtime.fs.writeBinary(path, JSByteArrays.uint8ArrayOrEmpty(file.selectDynamic("bytes")))
-            classpathEntries += path
+            path
+          }
 
           runtime.macroClasspath ++= classpathEntries
           runtime.importedMacroArtifacts += js.Dynamic.literal(
             id = id,
             implementationIR = implementationIR.toJSArray,
           )
+          MainJS.clearRetainedMacroModules()
+          runtime.retainedMacroRuntimeKey = ""
           refreshBrowserMacroArtifacts(runtime)
 
           Seq(
@@ -254,31 +258,38 @@ object BrowserIDEWorker:
         timings: mutable.Map[String, Double],
     ): js.Promise[CompilerRun] =
       js.async {
+        val compileStartedAt = nowMs()
         val previousTimings = runtime.activeTimings
         runtime.activeTimings = Some(timings)
         runtime.dynamicMacroArtifacts = macroArtifacts
         refreshBrowserMacroArtifacts(runtime)
 
         try
-          val args = (Seq(
+          val setupArgs = Seq(
             "-classpath",
             classpathArgument(runtime),
             "-d",
             OutputDir,
-          ) ++ sourcePaths).toJSArray
+          ).toJSArray
           val hasMacroArtifacts = runtime.importedMacroArtifacts.nonEmpty || runtime.dynamicMacroArtifacts.nonEmpty
           if hasMacroArtifacts then
             js.await(measureTiming(timings, "macro assets")(ensureBrowserMacroRuntime(runtime)))
+          val recordPhaseTiming: js.Function2[String, Double, Unit] =
+            (name: String, durationMs: Double) => recordTiming(Some(timings), name, durationMs)
           val compile =
-            if hasMacroArtifacts then MainJS.runWithBrowserMacroLinkingAsync(args)
-            else MainJS.runAsync(args)
+            if hasMacroArtifacts then
+              MainJS.runBrowserSessionWithRetainedMacroCompilerAndPhaseTimingAsync(setupArgs, sourcePaths.toJSArray, recordPhaseTiming)
+            else
+              MainJS.runBrowserSessionWithPhaseTimingAsync(setupArgs, sourcePaths.toJSArray, recordPhaseTiming)
           val captured = js.await(captureConsole(compile))
           CompilerRun(
             exitCode = captured.result,
             lines = captured.lines,
             emittedFiles = filesAt(runtime.fs, OutputDir),
           )
-        finally runtime.activeTimings = previousTimings
+        finally
+          runtime.activeTimings = previousTimings
+          recordTiming(Some(timings), "compile", nowMs() - compileStartedAt)
       }
 
     private def compileToIR(sourceOrFiles: js.Any): js.Promise[CompileResult] =
@@ -289,13 +300,15 @@ object BrowserIDEWorker:
         val sourcePaths = sourceFiles.map(_.sourcePath)
         val macroArtifacts = dynamicMacroArtifacts(sourceFiles)
 
-        def timedRunCompiler(paths: Seq[String]): CompilerRun =
-          js.await(measureTiming(timings, "compile")(runCompiler(runtime, paths, macroArtifacts, timings)))
-
         runtime.fs.removeTree("/workspace")
         runtime.fs.mkdir("/workspace")
         runtime.fs.mkdir(OutputDir)
         writeSourceFiles(runtime.fs, sourceFiles)
+
+        retainMacroModulesForCurrentSources(runtime, sourceFiles)
+
+        def timedRunCompiler(paths: Seq[String]): CompilerRun =
+          js.await(runCompiler(runtime, paths, macroArtifacts, timings))
 
         selectSourceEntrypoint(sourceFiles) match
           case Some(Selection(Some(entrypoint), _)) =>
@@ -384,12 +397,13 @@ object BrowserIDEWorker:
           )
 
     private def executeSession(session: LinkedSession): SessionResult =
-      val captured = js.await(captureConsole(js.Promise.resolve(session.runner(session.input))))
+      val result = session.runner(session.input)
+      val runnerOutput = stringOr(result.selectDynamic("output"), "")
       SessionResult(
         status =
-          if stringOr(captured.result.selectDynamic("status"), "") == "awaiting-input" then RunStatus.AwaitingInput
+          if stringOr(result.selectDynamic("status"), "") == "awaiting-input" then RunStatus.AwaitingInput
           else RunStatus.Completed,
-        output = joinOutput(captured.lines),
+        output = runnerOutput,
       )
 
     private def postSessionResult(sessionResult: SessionResult): Unit =
@@ -450,15 +464,6 @@ object BrowserIDEWorker:
         readZippedIRFilesAsync(bytes, pathPrefix)
       }
 
-    private def readAllZippedIRFiles(files: Seq[js.Dynamic]): js.Promise[Seq[BrowserLinkerBridge.IRInput]] =
-      files.foldLeft(js.Promise.resolve(Seq.empty[BrowserLinkerBridge.IRInput])) { (collected, file) =>
-        collected.`then`[Seq[BrowserLinkerBridge.IRInput]] { previous =>
-          readZippedIRFilesAsync(JSByteArrays.uint8ArrayOrEmpty(file.selectDynamic("bytes"))).`then`[Seq[BrowserLinkerBridge.IRInput]] { next =>
-            previous ++ next
-          }
-        }
-      }
-
     private def readZippedIRFilesAsync(zipBytes: Uint8Array, pathPrefix: String = ""): js.Promise[Seq[BrowserLinkerBridge.IRInput]] =
       JSZip.loadAsync(zipBytes).`then`[Seq[BrowserLinkerBridge.IRInput]] { zip =>
         zip.files.values
@@ -472,6 +477,15 @@ object BrowserIDEWorker:
               }
             }
           }
+      }
+
+    private def readAllZippedIRFiles(files: Seq[js.Dynamic]): js.Promise[Seq[BrowserLinkerBridge.IRInput]] =
+      files.foldLeft(js.Promise.resolve(Seq.empty[BrowserLinkerBridge.IRInput])) { (collected, file) =>
+        collected.`then`[Seq[BrowserLinkerBridge.IRInput]] { previous =>
+          readZippedIRFilesAsync(JSByteArrays.uint8ArrayOrEmpty(file.selectDynamic("bytes"))).`then`[Seq[BrowserLinkerBridge.IRInput]] { next =>
+            previous ++ next
+          }
+        }
       }
 
     private def captureConsole[A](run: js.Promise[A]): js.Promise[Captured[A]] =
@@ -596,14 +610,35 @@ object BrowserIDEWorker:
             "Detected entry points:",
           ).concat(candidates.map(candidate => s"- ${candidate.qualifiedName}")).mkString("\n")))
 
+    private def retainMacroModulesForCurrentSources(runtime: Runtime, sourceFiles: Seq[SourceFile]): Unit =
+      val key = sourceMacroRuntimeKey(sourceFiles)
+      if runtime.retainedMacroRuntimeKey != key then
+        MainJS.clearRetainedMacroModules()
+        runtime.retainedMacroRuntimeKey = key
+
     private def dynamicMacroArtifacts(sourceFiles: Seq[SourceFile]): Seq[js.Dynamic] =
-      val macroPackages = sourceFiles.filter(sourceFile => mayDefineQuotedMacro(sourceFile.content)).map(sourceFile => inferPackageName(sourceFile.content)).distinct.sorted
-      if macroPackages.isEmpty then Nil
-      else Seq(js.Dynamic.literal(id = UserMacroArtifactId, macroPackages = macroPackages.toJSArray, root = OutputDir))
+      val packages = macroPackages(macroSourceFiles(sourceFiles))
+      if packages.isEmpty then Nil
+      else Seq(js.Dynamic.literal(id = UserMacroArtifactId, macroPackages = packages.toJSArray, root = OutputDir))
+
+    private def macroSourceFiles(sourceFiles: Seq[SourceFile]): Seq[SourceFile] =
+      sourceFiles.filter(sourceFile => mayDefineQuotedMacro(sourceFile.content))
+
+    private def macroPackages(sourceFiles: Seq[SourceFile]): Seq[String] =
+      sourceFiles.map(sourceFile => inferPackageName(sourceFile.content)).distinct.sorted
+
+    private def sourceMacroRuntimeKey(sourceFiles: Seq[SourceFile]): String =
+      val macroFiles = macroSourceFiles(sourceFiles)
+      if macroFiles.isEmpty then ""
+      else sourceFilesKey(macroFiles)
+
+    private def sourceFilesKey(sourceFiles: Seq[SourceFile]): String =
+      def part(value: String): String = s"${value.length}:$value"
+      sourceFiles.sortBy(_.path).map(file => part(file.path) + part(file.content)).mkString
 
     private def createRunnerSource(entrypoint: Entrypoint): String =
       val invocation = if entrypoint.kind == "objectMain" then s"${entrypoint.qualifiedName}.main(Array.empty)" else s"${entrypoint.qualifiedName}()"
-      s"""import java.io.Reader
+      s"""import java.io.{ByteArrayOutputStream, PrintStream, Reader}
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSExportTopLevel
 
@@ -635,14 +670,23 @@ object BrowserIDERunner:
 
   @JSExportTopLevel("$RunnerExportName")
   def run(input: String): js.Object =
+    val output = new ByteArrayOutputStream()
+    val terminal = new PrintStream(output, true)
+    def result(status: String): js.Object =
+      terminal.flush()
+      js.Dynamic.literal(status = status, output = output.toString("UTF-8"))
     try
-      scala.Console.withIn(new TerminalReader(input)) {
-        $invocation
+      scala.Console.withOut(terminal) {
+        scala.Console.withErr(terminal) {
+          scala.Console.withIn(new TerminalReader(input)) {
+            $invocation
+          }
+        }
       }
-      js.Dynamic.literal(status = "completed")
+      result("completed")
     catch
       case _: AwaitingInput =>
-        js.Dynamic.literal(status = "awaiting-input")
+        result("awaiting-input")
 """
 
     private def compileHints(lines: Seq[String]): Seq[String] =
@@ -670,7 +714,7 @@ object BrowserIDERunner:
       )
       ()
 
-    private def measureTiming[A](timings: mutable.Map[String, Double], name: String)(operation: js.Promise[A]): js.Promise[A] =
+    private def measureTiming[A](timings: mutable.Map[String, Double], name: String)(operation: => js.Promise[A]): js.Promise[A] =
       js.async {
         val startedAt = nowMs()
         try js.await(operation)

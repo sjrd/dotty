@@ -1,56 +1,22 @@
 package dotty.tools.dotc.sjsmacros.host
 
 import dotty.tools.io.JSByteArrays
-import dotty.tools.sjs.JSInterop
 import dotty.tools.sjs.JSInterop.{dynamicArray, isDefined, stringArray}
 
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters.*
 import scala.scalajs.js.annotation.JSGlobal
 
-/** Browser-side macro linker facade.
- *
- *  The compiler still owns macro discovery and in-memory entrypoint IR
- *  generation. A browser host can either install
- *  `globalThis.__scala3CompilerSJSMacroLinker.linkCompilerWithMacros(request)`,
- *  or provide
- *  the default browser inputs:
- *
- *  - `globalThis.__scala3CompilerSJSCompilerIRFingerprint`
- *  - `globalThis.__scala3CompilerSJSMacroArtifacts`
- *  - `globalThis.__scala3CompilerSJSLinker.link(request)`
- *
- *  The default path resolves macro artifacts from the browser filesystem/cache,
- *  computes a stable cache key, and delegates only the final Scala.js link to
- *  the injected linker. Either path returns one of:
- *
- *  - a module namespace,
- *  - a module URL string, or
- *  - an object with `moduleUrl`.
- */
 object SjsBrowserMacroLinker:
   @js.native
   @JSGlobal("globalThis")
   private object GlobalThis extends js.Object
 
-  private val LinkerGlobalName = SjsMacroBrowserGlobals.CustomMacroLinker
   private val CompilerIRFingerprintGlobalName = SjsMacroBrowserGlobals.CompilerIRFingerprint
   private val MacroArtifactsGlobalName = SjsMacroBrowserGlobals.MacroArtifacts
   private val ScalaJSLinkerGlobalName = SjsMacroBrowserGlobals.ScalaJSLinker
 
   def relink(request: js.Dynamic): js.Any =
-    val linker = GlobalThis.asInstanceOf[js.Dynamic].selectDynamic(LinkerGlobalName)
-    if isDefined(linker) then
-      val linkCompilerWithMacros = linker.selectDynamic("linkCompilerWithMacros")
-      if js.typeOf(linkCompilerWithMacros) == "function" then
-        linkCompilerWithMacros.asInstanceOf[js.Function1[js.Dynamic, js.Any]](request)
-      else
-        throw js.JavaScriptException(
-          s"browser macro linker must define linkCompilerWithMacros(request)"
-        )
-    else relinkFromBrowserArtifacts(request)
-
-  def relinkFromBrowserArtifacts(request: js.Dynamic): js.Any =
     val requestedPackageNames = stringArray(request.selectDynamic("packageNames")).distinct
     val entryPointsIR = entryPointIRArray(request.selectDynamic("entryPointsIR"))
     val artifacts = configuredArtifacts()

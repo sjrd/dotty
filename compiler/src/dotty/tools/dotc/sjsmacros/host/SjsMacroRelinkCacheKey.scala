@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets
 
 object SjsMacroRelinkCacheKey:
   import SjsMacroArtifacts.IRFile
+  private val Fnv64OffsetBasis = 0xcbf29ce484222325L
+  private val Fnv64Prime = 0x100000001b3L
 
   def compute(
       compilerIRFingerprint: String,
@@ -39,7 +41,7 @@ object SjsMacroRelinkCacheKey:
    *  implementation outside the compiler runtime.
    */
   private final class Fingerprint:
-    private var hash = 0xcbf29ce484222325L
+    private var hash = Fnv64OffsetBasis
 
     def updateString(value: String): Unit =
       updateBytes(value.getBytes(StandardCharsets.UTF_8))
@@ -56,5 +58,5 @@ object SjsMacroRelinkCacheKey:
       var i = 0
       while i < bytes.length do
         hash ^= bytes(i).toLong & 0xffL
-        hash *= 0x100000001b3L
+        hash *= Fnv64Prime
         i += 1
