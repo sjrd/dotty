@@ -49,6 +49,22 @@ object MyMacros:
       },
     ],
   },
+  externalMacro: {
+    macroArtifacts: [
+      { name: "external-macro.jar", url: "./assets/examples/external-macro.jar" },
+      { name: "external-macro-sjsir.zip", url: "./assets/examples/external-macro-sjsir.zip" },
+    ],
+    files: [
+      {
+        path: "Main.scala",
+        content: `import externalmacros.ExternalMacros
+
+@main def externalMacroDemo() =
+  println(ExternalMacros.label("from library"))
+`,
+      },
+    ],
+  },
 };
 
 const DEFAULT_EXAMPLE = "hello";
@@ -61,6 +77,7 @@ const fileTabsEl = document.querySelector("#file-tabs");
 const filePathEl = document.querySelector("#file-path");
 const addFileButton = document.querySelector("#add-file-button");
 const deleteFileButton = document.querySelector("#delete-file-button");
+const compilerDiagnosticsToggleEl = document.querySelector("#compiler-diagnostics-toggle");
 const compileTimerEl = document.querySelector("#compile-timer");
 const compileTimerSummaryEl = document.querySelector("#compile-timer-summary");
 const compileTimerDetailsEl = document.querySelector("#compile-timer-details");
@@ -80,6 +97,9 @@ let runtimeBlocked = false;
 let nextFileId = 0;
 let files = [];
 let currentFileId = null;
+let currentExampleKey = DEFAULT_EXAMPLE;
+let importedExampleMacroKey = "";
+let pendingMacroImport = null;
 let compileTimerDetailsPinned = false;
 let compileTimerDetailsHovered = false;
 let compileTimerDetailsHideTimer = 0;
@@ -124,13 +144,19 @@ function renderTimingDetails(details) {
     }
     row.style.setProperty("--level", String(detail.level ?? 0));
 
+    if (detail.kind === "log") {
+      row.textContent = detail.text ?? detail.name;
+      compileTimerTooltipEl.append(row);
+      continue;
+    }
+
     const name = document.createElement("span");
     name.className = "compile-timer-detail-name";
     name.textContent = detail.name;
 
     const duration = document.createElement("span");
     duration.className = "compile-timer-detail-duration";
-    duration.textContent = ` ${detail.durationText}`;
+    duration.textContent = detail.durationText ? ` ${detail.durationText}` : "";
 
     row.append(name, duration);
     compileTimerTooltipEl.append(row);
@@ -169,6 +195,26 @@ function appendCompilerRun(rows, entriesByName, run, level) {
   }
 }
 
+function compilerLogLines(message) {
+  return [...(message.compilerLog ?? [])]
+    .flatMap((line) => String(line ?? "").split(/\r?\n/))
+    .filter((line) => line.trim() !== "");
+}
+
+function appendCompilerLog(rows, lines) {
+  if (lines.length === 0) {
+    return;
+  }
+
+  rows.push({
+    name: "compiler log",
+    durationText: `${lines.length} ${lines.length === 1 ? "line" : "lines"}`,
+    level: 0,
+    kind: "group",
+  });
+  rows.push(...lines.map((line) => ({ name: line, text: line, durationText: "", level: 1, kind: "log" })));
+}
+
 function buildTimingDetails(message, totalDurationText) {
   const entries = [...(message.phases ?? [])]
     .map((phase) => ({
@@ -178,7 +224,8 @@ function buildTimingDetails(message, totalDurationText) {
       level: 0,
     }))
     .filter((phase) => phase.name && phase.durationText);
-  if (entries.length === 0) {
+  const logLines = compilerLogLines(message);
+  if (entries.length === 0 && logLines.length === 0) {
     return [];
   }
 
@@ -236,6 +283,8 @@ function buildTimingDetails(message, totalDurationText) {
   if (notItemizedMs >= 1) {
     rows.push(timingRow("not itemized / browser overhead", notItemizedMs, 1));
   }
+
+  appendCompilerLog(rows, logLines);
 
   return rows;
 }
@@ -363,8 +412,13 @@ function renderOutput(text) {
 }
 
 function blockRuntime(message) {
+  if (pendingMacroImport) {
+    pendingMacroImport.reject(new Error(message));
+    pendingMacroImport = null;
+  }
   ready = false;
   running = false;
+  importingMacro = false;
   waitingForInput = false;
   runtimeBlocked = true;
   setTerminalInputVisible(false);
@@ -415,6 +469,7 @@ function selectFile(fileId) {
 
 function setExample(exampleKey) {
   const example = EXAMPLES[exampleKey] ?? EXAMPLES[DEFAULT_EXAMPLE];
+  currentExampleKey = EXAMPLES[exampleKey] ? exampleKey : DEFAULT_EXAMPLE;
   files = example.files.map((file) => newFile(file.path, file.content));
   currentFileId = files[0]?.id ?? null;
   loadCurrentFile();
@@ -486,6 +541,7 @@ function updateButtonState() {
   filePathEl.disabled = running || importingMacro;
   addFileButton.disabled = running || importingMacro;
   deleteFileButton.disabled = running || importingMacro || files.length <= 1;
+  compilerDiagnosticsToggleEl.disabled = running || importingMacro;
   importMacroButton.disabled = !ready || running || importingMacro;
   runButton.dataset.state = running ? "loading" : idleState;
   importMacroButton.dataset.state = importingMacro ? "loading" : idleState;
@@ -495,8 +551,8 @@ function updateButtonState() {
   renderFileTabs();
 }
 
-function runSource() {
-  if (!ready || running) {
+async function runSource() {
+  if (!ready || running || importingMacro) {
     return;
   }
 
@@ -504,6 +560,15 @@ function runSource() {
   const validationError = validateFiles();
   if (validationError) {
     renderOutput(validationError);
+    return;
+  }
+
+  try {
+    await ensureExampleMacroArtifacts();
+  } catch (error) {
+    importingMacro = false;
+    updateButtonState();
+    renderOutput(error instanceof Error ? error.message : String(error));
     return;
   }
 
@@ -516,6 +581,7 @@ function runSource() {
   worker.postMessage({
     type: "run",
     files: files.map(({ path, content }) => ({ path, content })),
+    diagnostics: compilerDiagnosticsToggleEl.checked,
   });
 }
 
@@ -542,6 +608,51 @@ async function readImportFiles(selectedFiles) {
   })));
 }
 
+async function readBundledImportFiles(artifacts) {
+  return Promise.all(artifacts.map(async (artifact) => {
+    const response = await fetch(artifact.url, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ${artifact.name}: ${response.status} ${response.statusText}`);
+    }
+    return {
+      name: artifact.name,
+      bytes: new Uint8Array(await response.arrayBuffer()),
+    };
+  }));
+}
+
+function postMacroImport(importFiles) {
+  if (pendingMacroImport) {
+    throw new Error("A macro import is already running.");
+  }
+
+  return new Promise((resolve, reject) => {
+    pendingMacroImport = { resolve, reject };
+    worker.postMessage(
+      {
+        type: "import-macro-artifact",
+        files: importFiles,
+      },
+      importFiles.map((file) => file.bytes.buffer),
+    );
+  });
+}
+
+async function ensureExampleMacroArtifacts() {
+  const example = EXAMPLES[currentExampleKey];
+  if (!example?.macroArtifacts || importedExampleMacroKey === currentExampleKey) {
+    return;
+  }
+
+  importingMacro = true;
+  updateButtonState();
+  renderOutput("Importing macro library...");
+
+  const importFiles = await readBundledImportFiles(example.macroArtifacts);
+  await postMacroImport(importFiles);
+  importedExampleMacroKey = currentExampleKey;
+}
+
 async function importMacroFiles(selectedFiles) {
   if (!ready || running || importingMacro || selectedFiles.length === 0) {
     return;
@@ -553,13 +664,8 @@ async function importMacroFiles(selectedFiles) {
 
   try {
     const importFiles = await readImportFiles(selectedFiles);
-    worker.postMessage(
-      {
-        type: "import-macro-artifact",
-        files: importFiles,
-      },
-      importFiles.map((file) => file.bytes.buffer),
-    );
+    const output = await postMacroImport(importFiles);
+    renderOutput(output);
   } catch (error) {
     importingMacro = false;
     updateButtonState();
@@ -670,7 +776,17 @@ worker.addEventListener("message", (event) => {
       importingMacro = false;
       ready = !runtimeBlocked;
       updateButtonState();
-      renderOutput(message.output);
+      if (pendingMacroImport) {
+        const pending = pendingMacroImport;
+        pendingMacroImport = null;
+        if (message.ok) {
+          pending.resolve(message.output);
+        } else {
+          pending.reject(new Error(message.output));
+        }
+      } else {
+        renderOutput(message.output);
+      }
       break;
 
     case "runtime-error":

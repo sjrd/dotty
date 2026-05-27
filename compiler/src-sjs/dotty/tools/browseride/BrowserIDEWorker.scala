@@ -20,6 +20,11 @@ object BrowserIDEWorker:
   private val RunnerExportName = "runBrowserIDEProgram"
   private val UserMacroArtifactId = "browser-editor-macros"
   private val ImportedMacroRoot = "/imported-macro-artifacts"
+  private val CompilerDiagnosticsArgs = Seq("-verbose", "-Vprofile", "-Vprofile-details", "5")
+  private val MacroRelinkDiagnosticMarkers = Seq(
+    "Scala.js macro entry point is not linked:",
+    "Scala.js macro entry points are not linked:",
+  )
 
   @js.native
   @JSImport("jszip", JSImport.Default)
@@ -112,7 +117,10 @@ object BrowserIDEWorker:
           case "run" =>
             post("status", "text" -> "Compiling and running...")
             val files = data.selectDynamic("files")
-            startRun(if js.Array.isArray(files) then files.asInstanceOf[js.Array[js.Dynamic]] else js.Array())
+            startRun(
+              if js.Array.isArray(files) then files.asInstanceOf[js.Array[js.Dynamic]] else js.Array(),
+              booleanOrFalse(data.selectDynamic("diagnostics")),
+            )
           case "stdin" =>
             continueRun(stringOr(data.selectDynamic("line"), ""))
           case "import-macro-artifact" =>
@@ -256,6 +264,7 @@ object BrowserIDEWorker:
         sourcePaths: Seq[String],
         macroArtifacts: Seq[js.Dynamic],
         timings: mutable.Map[String, Double],
+        diagnostics: Boolean,
     ): js.Promise[CompilerRun] =
       js.async {
         val compileStartedAt = nowMs()
@@ -265,12 +274,12 @@ object BrowserIDEWorker:
         refreshBrowserMacroArtifacts(runtime)
 
         try
-          val setupArgs = Seq(
+          val setupArgs = (Seq(
             "-classpath",
             classpathArgument(runtime),
             "-d",
             OutputDir,
-          ).toJSArray
+          ) ++ Option.when(diagnostics)(CompilerDiagnosticsArgs).toSeq.flatten).toJSArray
           val hasMacroArtifacts = runtime.importedMacroArtifacts.nonEmpty || runtime.dynamicMacroArtifacts.nonEmpty
           if hasMacroArtifacts then
             js.await(measureTiming(timings, "macro assets")(ensureBrowserMacroRuntime(runtime)))
@@ -292,7 +301,7 @@ object BrowserIDEWorker:
           recordTiming(Some(timings), "compile", nowMs() - compileStartedAt)
       }
 
-    private def compileToIR(sourceOrFiles: js.Any): js.Promise[CompileResult] =
+    private def compileToIR(sourceOrFiles: js.Any, diagnostics: Boolean): js.Promise[CompileResult] =
       js.async {
         val timings = mutable.LinkedHashMap.empty[String, Double]
         val runtime = js.await(ensureRuntime())
@@ -308,7 +317,7 @@ object BrowserIDEWorker:
         retainMacroModulesForCurrentSources(runtime, sourceFiles)
 
         def timedRunCompiler(paths: Seq[String]): CompilerRun =
-          js.await(runCompiler(runtime, paths, macroArtifacts, timings))
+          js.await(runCompiler(runtime, paths, macroArtifacts, timings, diagnostics))
 
         selectSourceEntrypoint(sourceFiles) match
           case Some(Selection(Some(entrypoint), _)) =>
@@ -335,11 +344,12 @@ object BrowserIDEWorker:
                   CompileResult(false, 0, Seq("No runnable entry point was found."), Nil, Nil, runtime, Nil, timings)
       }
 
-    private def createLinkedSession(sourceOrFiles: js.Any): js.Promise[LinkedSessionResult] =
+    private def createLinkedSession(sourceOrFiles: js.Any, diagnostics: Boolean): js.Promise[LinkedSessionResult] =
       js.async {
         val startedAt = nowMs()
-        val compileResult = js.await(compileToIR(sourceOrFiles))
+        val compileResult = js.await(compileToIR(sourceOrFiles, diagnostics))
         if !compileResult.ok then
+          postCompileDuration(startedAt, compileResult)
           LinkedSessionResult.Failed(summarizeCompileFailure(compileResult))
         else
           post("status", "text" -> "Linking...")
@@ -348,23 +358,27 @@ object BrowserIDEWorker:
             BrowserLinkerBridge.linkModuleAsync((runtimeIR ++ compileResult.irFiles).toJSArray)
           )).asInstanceOf[js.Dynamic]
           val linkedRunner = js.await(measureTiming(compileResult.timings, "program import")(loadLinkedRunner(linkResult.selectDynamic("code").toString)))
-          post("compile-duration",
-            "durationMs" -> math.max(0.0, nowMs() - startedAt),
-            "phases" -> compileResult.timings.collect {
-              case (name, durationMs) if durationMs >= 0.5 =>
-                js.Dynamic.literal(name = name, durationMs = durationMs)
-            }.toJSArray,
-          )
+          postCompileDuration(startedAt, compileResult)
           LinkedSessionResult.Ready(LinkedSession(
             linkedRunner.selectDynamic("moduleURL").toString,
             linkedRunner.selectDynamic("runner").asInstanceOf[js.Function1[String, js.Dynamic]],
           ))
       }
 
-    private def startRun(sourceOrFiles: js.Any): Unit =
+    private def postCompileDuration(startedAt: Double, compileResult: CompileResult): Unit =
+      post("compile-duration",
+        "durationMs" -> math.max(0.0, nowMs() - startedAt),
+        "phases" -> compileResult.timings.collect {
+          case (name, durationMs) if durationMs >= 0.5 =>
+            js.Dynamic.literal(name = name, durationMs = durationMs)
+        }.toJSArray,
+        "compilerLog" -> compileResult.lines.toJSArray,
+      )
+
+    private def startRun(sourceOrFiles: js.Any, diagnostics: Boolean): Unit =
       onComplete(js.async {
         disposeActiveSession()
-        val sessionResult = js.await(createLinkedSession(sourceOrFiles))
+        val sessionResult = js.await(createLinkedSession(sourceOrFiles, diagnostics))
         sessionResult match
           case LinkedSessionResult.Failed(output) =>
             post("run-result", "ok" -> false, "output" -> output)
@@ -434,16 +448,51 @@ object BrowserIDEWorker:
       activeSession = None
 
     private def compileResult(compile: CompilerRun, runtime: Runtime, timings: mutable.Map[String, Double]): CompileResult =
+      val visibleLines = userVisibleCompilerLog(compile)
       CompileResult(
         ok = compile.exitCode == 0,
         exitCode = compile.exitCode,
-        lines = compile.lines,
+        lines = visibleLines,
         emittedFiles = compile.emittedFiles,
         irFiles = if compile.exitCode == 0 then collectOutputIRFiles(runtime.fs, OutputDir) else Nil,
         runtime = runtime,
-        hints = compileHints(compile.lines),
+        hints = compileHints(visibleLines),
         timings = timings,
       )
+
+    private def userVisibleCompilerLog(compile: CompilerRun): Seq[String] =
+      if compile.exitCode == 0 then suppressExpectedMacroRelinkDiagnostics(compile.lines)
+      else compile.lines
+
+    private def suppressExpectedMacroRelinkDiagnostics(lines: Seq[String]): Seq[String] =
+      lines.flatMap { entry =>
+        if entry == null || !isExpectedMacroRelinkDiagnostic(entry) then Seq(entry)
+        else splitDiagnosticBlocks(entry)
+          .filterNot(block => block.exists(isExpectedMacroRelinkDiagnostic))
+          .map(_.mkString("\n"))
+          .filter(_.trim.nonEmpty)
+      }
+
+    private def splitDiagnosticBlocks(entry: String): Seq[Seq[String]] =
+      val blocks = mutable.ArrayBuffer.empty[Seq[String]]
+      val current = mutable.ArrayBuffer.empty[String]
+
+      def flush(): Unit =
+        if current.nonEmpty then
+          blocks += current.toSeq
+          current.clear()
+
+      for line <- entry.split("\\r?\\n", -1) do
+        if isDiagnosticStart(line) then flush()
+        current += line
+      flush()
+      blocks.toSeq
+
+    private def isDiagnosticStart(line: String): Boolean =
+      line.startsWith("-- Error:") || line.startsWith("-- Warning:") || line.startsWith("-- [")
+
+    private def isExpectedMacroRelinkDiagnostic(text: String): Boolean =
+      MacroRelinkDiagnosticMarkers.exists(text.contains)
 
     private def summarizeCompileFailure(result: CompileResult): String =
       joinOutput(Seq(
@@ -693,6 +742,9 @@ object BrowserIDERunner:
       if joinOutput(lines).contains("Not found: readLine") then
         Seq("Hint: in Scala 3, use `import scala.io.StdIn.readLine` or call `scala.io.StdIn.readLine()`.")
       else Nil
+
+    private def booleanOrFalse(value: js.Any): Boolean =
+      isDefined(value) && js.typeOf(value) == "boolean" && value.asInstanceOf[Boolean]
 
     private def formatValue(value: js.Any): String =
       stripAnsi(if js.typeOf(value) == "string" then value.toString else js.JSON.stringify(value).toString)

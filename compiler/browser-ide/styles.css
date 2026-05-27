@@ -92,6 +92,20 @@ textarea {
   justify-content: flex-end;
 }
 
+.diagnostics-toggle {
+  align-items: center;
+  color: #d6d6d6;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.diagnostics-toggle input {
+  accent-color: #4aa777;
+}
+
 .compile-timer {
   align-items: center;
   display: inline-flex;
@@ -170,6 +184,15 @@ textarea {
 .compile-timer-detail.is-group {
   color: #ffffff;
   font-weight: 600;
+}
+
+.compile-timer-detail.is-log {
+  color: #d0d0d0;
+  display: block;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .compile-timer-detail-name {

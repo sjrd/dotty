@@ -164,6 +164,7 @@ class Compiler {
            new ExpandPrivate,
            new RestoreScopes,
            new SelectStatic,
+           new sjs.JUnitBootstrappers,
            new RepeatableAnnotations)
     ) ::: // Aggregate repeatable annotations
     Nil

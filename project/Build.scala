@@ -176,6 +176,7 @@ object Build {
 
   val fetchScalaJSSource = taskKey[File]("Fetch the sources of Scala.js")
   val bundleSjsCompilerLibs = taskKey[File]("Bundle the libraries required by scala3-compiler-sjs validation tests")
+  val sjsCompilerUnitTest = taskKey[Unit]("Compile, link, and run sjsJUnitTests with scala3-compiler-sjs")
   val sjsCompilerValidationTest = taskKey[Unit]("Run the minimal scala3-compiler-sjs CI validation test suite")
   val prepareBrowserIDE = taskKey[File]("Prepare the static browser IDE assets for scala3-compiler-sjs")
 
@@ -1795,6 +1796,17 @@ object Build {
   )
 
   /* Configuration of the org.scala-lang:scala3-compiler_3:*.**.**-sjs project */
+  lazy val sjsCompilerBrowserIDEExampleMacros = Project("sjsCompilerBrowserIDEExampleMacros", file("compiler/browser-ide/example-macros"))
+    .enablePlugins(DottyJSPlugin)
+    .dependsOn(`scala3-library-sjs`)
+    .settings(
+      regularScalaJSProjectSettings,
+      name := "sjs-compiler-browser-ide-example-macros",
+      scalaJSUseMainModuleInitializer := false,
+      publish / skip := true,
+      Test / fork := false,
+    )
+
   lazy val `scala3-compiler-sjs` = project.in(file("compiler"))
     .dependsOn(`scala3-interfaces-sjs`, `scala3-library-sjs`)
     .enablePlugins(DottyJSPlugin, ScalaJSPlugin)
@@ -1875,6 +1887,41 @@ object Build {
         )
         s.log.info("scala3-compiler-sjs validation test passed")
       },
+      sjsCompilerUnitTest := {
+        val s = streams.value
+        val outputDir = (Compile / fullLinkJS / scalaJSLinkerOutputDirectory).value
+        (Compile / fullLinkJS).value
+        val scalaJSSourceDir = (sjsJUnitTests / fetchScalaJSSource).value
+        val suiteSources =
+          (sjsJUnitTests / Compile / sources).value ++
+            (sjsJUnitTests / Test / sources).value
+        val suiteClasspath = (sjsJUnitTests / Test / externalDependencyClasspath).value.map(_.data)
+        val libsDir = bundleSjsCompilerLibs.value
+        (`scala-library-sjs` / Compile / compile).value
+        val scalaLibClasses = (`scala-library-sjs` / Compile / classDirectory).value
+        val testDir = target.value / "sjs-compiler-unit-test"
+        val classpathDir = testDir / "classpath"
+        val rtJar = classpathDir / "rt.jar"
+        val scalaLibJar = classpathDir / "scala-lib.jar"
+
+        if (!rtJar.exists()) {
+          s.log.info(s"Extracting java.base from jrt:/ to $rtJar")
+          SjsCompilerBrowserIDE.extractRTJar(rtJar)
+        }
+        SjsCompilerBrowserIDE.zipDirectory(scalaLibClasses, scalaLibJar)
+
+        SjsCompilerNodeUnitTest.run(
+          outputDir / "main.js",
+          suiteSources,
+          Seq("-nowarn", "-scalajs-genStaticForwardersForNonTopLevelObjects"),
+          Seq(rtJar, scalaLibJar) ++ suiteClasspath,
+          Seq(libsDir / "sjsir") ++ suiteClasspath,
+          Seq(scalaJSSourceDir / "test-suite/js/src/test/resources/NonNativeJSTypeTestNatives.js"),
+          sjsCompilerNodeFlags,
+          testDir,
+          s.log,
+        )
+      },
       prepareBrowserIDE := {
         val s = streams.value
         val browserIdeDir = baseDirectory.value / "browser-ide"
@@ -1892,7 +1939,9 @@ object Build {
         val scalaLibJar = assetsDir / "scala-lib.jar"
         val compilerIRZip = assetsDir / "compiler-sjsir.zip"
         val runtimeIRZip = assetsDir / "runtime-sjsir.zip"
+        val exampleMacroIRZip = assetsDir / "browser-ide-example-macro-sjsir.zip"
         val jszipDist = baseDirectory.value / "node_modules" / "jszip" / "dist" / "jszip.js"
+        val exampleMacroJar = (sjsCompilerBrowserIDEExampleMacros / Compile / packageBin).value
 
         if (!rtJar.exists()) {
           s.log.info(s"Extracting java.base from jrt:/ to $rtJar")
@@ -1905,6 +1954,8 @@ object Build {
         SjsCompilerBrowserIDE.zipIRClasspath((Compile / fullClasspath).value.map(_.data), compilerIRZip)
         s.log.info(s"Packing Scala.js library classes into $scalaLibJar")
         SjsCompilerBrowserIDE.zipDirectory(scalaLibClasses, scalaLibJar)
+        s.log.info(s"Packing browser IDE example macro Scala.js IR into $exampleMacroIRZip")
+        SjsCompilerBrowserIDE.zipIRClasspath(Seq((sjsCompilerBrowserIDEExampleMacros / Compile / classDirectory).value), exampleMacroIRZip)
 
         if (!jszipDist.exists())
           sys.error("Missing Node dependency `jszip`. Run `cd compiler && npm install` before preparing browser IDE assets.")
@@ -1917,6 +1968,8 @@ object Build {
           scalaJSLibJar,
           rtJar,
           runtimeIRZip,
+          exampleMacroJar,
+          exampleMacroIRZip,
           jszipDist,
           s.log,
         )
@@ -2409,9 +2462,7 @@ object Build {
   /** Scala.js test suite.
    *
    *  This project downloads the sources of the upstream Scala.js test suite,
-   *  and tests them with the dotty Scala.js back-end. Currently, only a very
-   *  small fraction of the upstream test suite is actually compiled and run.
-   *  It will grow in the future, as more stuff is confirmed to be supported.
+   *  and tests the supported JUnit sources with the dotty Scala.js back-end.
    */
   lazy val sjsJUnitTests = project.in(file("tests/sjs-junit")).
     enablePlugins(DottyJSPlugin).

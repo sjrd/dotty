@@ -16,6 +16,7 @@ import Types.*
 import Decorators.em
 
 import dotty.tools.dotc.transform.MegaPhase.*
+import dotty.tools.dotc.util.PlatformDependent.platformDependent
 
 import dotty.tools.backend.sjs.JSDefinitions.jsdefn
 
@@ -114,7 +115,12 @@ class JUnitBootstrappers extends MiniPhase {
   override def description: String = JUnitBootstrappers.description
 
   override def isEnabled(using Context): Boolean =
-    super.isEnabled && ctx.settings.scalajs.value
+    super.isEnabled &&
+      ctx.settings.scalajs.value &&
+      platformDependent(true)(
+        getClassIfDefined("org.junit.Test").exists &&
+          getClassIfDefined("org.scalajs.junit.Bootstrapper").exists
+      )
 
   // The actual transform -------------------------------
 
@@ -173,7 +179,7 @@ class JUnitBootstrappers extends MiniPhase {
       genNewInstance(classSym, testClass)
     )
 
-    sbt.APIUtils.registerDummyClass(classSym)
+    val _ = platformDependent[Unit](sbt.APIUtils.registerDummyClass(classSym))(())
 
     ClassDef(classSym, constr, defs)
   }
