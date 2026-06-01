@@ -97,6 +97,7 @@ object ConstFold:
     case (nme.toInt   , _ ) if x.isNumeric => Constant(x.intValue)
     case (nme.toLong  , _ ) if x.isNumeric => Constant(x.longValue)
     case (nme.toFloat , _ ) if x.isNumeric => Constant(x.floatValue)
+    //TODO: workaround to fix an error in the sjs compiler where Float.toDouble constant folding could produce a JS-double-shaped value instead of the correctly rounded JVM/Scala Float value.
     case (nme.toDouble, FloatTag) if platformDependent(false)(true) => null
     case (nme.toDouble, _ ) if x.isNumeric => Constant(x.doubleValue)
 

@@ -177,6 +177,7 @@ object Build {
   val fetchScalaJSSource = taskKey[File]("Fetch the sources of Scala.js")
   val bundleSjsCompilerLibs = taskKey[File]("Bundle the libraries required by scala3-compiler-sjs validation tests")
   val sjsCompilerUnitTest = taskKey[Unit]("Compile, link, and run sjsJUnitTests with scala3-compiler-sjs")
+  val sjsCompilerCompilationTest = taskKey[Unit]("Run this codebase's Scala.js compilation tests")
   val sjsCompilerValidationTest = taskKey[Unit]("Run the minimal scala3-compiler-sjs CI validation test suite")
   val prepareBrowserIDE = taskKey[File]("Prepare the static browser IDE assets for scala3-compiler-sjs")
 
@@ -1887,14 +1888,18 @@ object Build {
         )
         s.log.info("scala3-compiler-sjs validation test passed")
       },
+      sjsCompilerCompilationTest :=
+        (sjsCompilerTests / Test / testOnly).toTask(" dotty.tools.dotc.ScalaJSCompilationTests").value,
       sjsCompilerUnitTest := {
         val s = streams.value
         val outputDir = (Compile / fullLinkJS / scalaJSLinkerOutputDirectory).value
         (Compile / fullLinkJS).value
-        val scalaJSSourceDir = (sjsJUnitTests / fetchScalaJSSource).value
         val suiteSources =
           (sjsJUnitTests / Compile / sources).value ++
             (sjsJUnitTests / Test / sources).value
+        val suiteResources = (sjsJUnitTests / Test / resources).value
+        val suiteJsEnvScripts =
+          suiteResources.filter(_.getName == "NonNativeJSTypeTestNatives.js")
         val suiteClasspath = (sjsJUnitTests / Test / externalDependencyClasspath).value.map(_.data)
         val libsDir = bundleSjsCompilerLibs.value
         (`scala-library-sjs` / Compile / compile).value
@@ -1916,7 +1921,8 @@ object Build {
           Seq("-nowarn", "-scalajs-genStaticForwardersForNonTopLevelObjects"),
           Seq(rtJar, scalaLibJar) ++ suiteClasspath,
           Seq(libsDir / "sjsir") ++ suiteClasspath,
-          Seq(scalaJSSourceDir / "test-suite/js/src/test/resources/NonNativeJSTypeTestNatives.js"),
+          suiteResources,
+          suiteJsEnvScripts,
           sjsCompilerNodeFlags,
           testDir,
           s.log,

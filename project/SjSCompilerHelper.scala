@@ -540,6 +540,7 @@ object SjsCompilerNodeUnitTest {
       compilerOptions: Seq[String],
       classpath: Seq[File],
       linkerClasspath: Seq[File],
+      testResources: Seq[File],
       jsEnvScripts: Seq[File],
       nodeFlags: Seq[String],
       targetDir: File,
@@ -548,10 +549,15 @@ object SjsCompilerNodeUnitTest {
     val sourceDir = new File(targetDir, "src")
     val classesDir = new File(targetDir, "classes")
     val linkedDir = new File(targetDir, "linked")
+    val testResourcesDir = new File(targetDir, "test-classes")
 
     sources.foreach { source =>
       if (!source.isFile)
         sys.error(s"Missing sjsJUnitTests source: $source")
+    }
+    testResources.foreach { resource =>
+      if (!resource.isFile)
+        sys.error(s"Missing sjsJUnitTests resource: $resource")
     }
     jsEnvScripts.foreach { script =>
       if (!script.isFile)
@@ -561,10 +567,13 @@ object SjsCompilerNodeUnitTest {
     IO.delete(sourceDir)
     IO.delete(classesDir)
     IO.delete(linkedDir)
+    IO.delete(testResourcesDir)
     IO.createDirectory(targetDir)
     IO.createDirectory(sourceDir)
     IO.createDirectory(classesDir)
     IO.createDirectory(linkedDir)
+    IO.createDirectory(testResourcesDir)
+    copyTestResources(testResources, testResourcesDir, log)
 
     val runnerSource = new File(sourceDir, "Test.scala")
     val compilerLauncher = new File(targetDir, "run-compiler.mjs")
@@ -616,6 +625,14 @@ object SjsCompilerNodeUnitTest {
       sys.error(s"scala3-compiler-sjs sjsJUnitTests did not print the expected output:\n$output")
 
     log.info("scala3-compiler-sjs sjsJUnitTests passed")
+  }
+
+  private def copyTestResources(resources: Seq[File], targetDir: File, log: Logger): Unit = {
+    resources.foreach { resource =>
+      IO.copyFile(resource, new File(targetDir, resource.getName))
+    }
+    if (resources.nonEmpty)
+      log.info(s"Copied ${resources.size} sjsJUnitTests resources to $targetDir")
   }
 
   private def link(classpath: Seq[File], linkedDir: Path): Path = {
@@ -823,7 +840,7 @@ object SjsCompilerNodeUnitTest {
       case '\t' => "\\t"
       case c if c < ' ' || c > '~' => "\\u%04x".format(c.toInt)
       case c => c.toString
-    } + "\""
+    }.mkString + "\""
 
   private def jsString(value: String): String =
     "\"" + value.iterator.flatMap {
@@ -833,5 +850,5 @@ object SjsCompilerNodeUnitTest {
       case '\r' => "\\r"
       case '\t' => "\\t"
       case c => c.toString
-    } + "\""
+    }.mkString + "\""
 }
