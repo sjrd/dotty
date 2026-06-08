@@ -342,6 +342,23 @@ trait ParallelTesting extends RunnerOrchestration with CoverageSupport:
     }
   }
 
+  protected final case class ScalaCompilerFailure(
+      errorsText: String,
+      compilerVersion: String,
+      checkOutput: Option[List[String]] = None,
+  )
+
+  protected def processScalaSources(
+      args: Array[String],
+      sourcePaths: Array[String],
+      targetDir: JFile,
+      reporter: TestReporter,
+      driver: Driver
+  ): Option[ScalaCompilerFailure] = {
+    driver.process(args ++ sourcePaths, reporter = reporter)
+    None
+  }
+
   /** Each `Test` takes the `testSources` and performs the compilation and assertions
    *  according to the implementing class "neg", "run" or "pos".
    */
@@ -423,6 +440,7 @@ trait ParallelTesting extends RunnerOrchestration with CoverageSupport:
     private var _skipCount = 0
     protected final def registerSkip(): Unit = synchronized { _skipCount += 1 }
     def skipCount: Int = _skipCount
+    private val compilerOutputOverrides = mutable.HashMap.empty[TestReporter, List[String]]
 
     protected def logBuildInstructions(testSource: TestSource, reporters: Seq[TestReporter]) = {
       val (errCount, warnCount) = countErrorsAndWarnings(reporters)
@@ -557,7 +575,25 @@ trait ParallelTesting extends RunnerOrchestration with CoverageSupport:
               .toSet
             dottyFiles.filterNot(excludedFiles)
 
-        driver.process(allArgs ++ dottyFiles0, reporter = reporter)
+        processScalaSources(allArgs, dottyFiles0, targetDir, reporter, driver) match
+          case Some(ScalaCompilerFailure(errorsText, compilerVersion, checkOutput)) =>
+            checkOutput.foreach { lines =>
+              compilerOutputOverrides.synchronized {
+                compilerOutputOverrides(reporter) = lines
+              }
+            }
+            val diagnostics = parseErrors(errorsText, compilerVersion, TestConfiguration.pageWidth - 20)
+            val reportedDiagnostics =
+              if diagnostics.nonEmpty then diagnostics
+              else Diagnostic.Error(
+                s"Compilation with $compilerVersion failed.\nFull error output:\n$errorsText",
+                NoSourcePosition,
+              ) :: Nil
+            reportedDiagnostics.foreach { diag =>
+              val context = (new ContextBase).initialCtx
+              reporter.report(diag)(using context)
+            }
+          case None => ()
 
         // todo a better mechanism than ONLY. test: -scala-only?
         val javaFiles = files.filter(_.getName.endsWith(".java")).filterNot(_.getName.contains("SCALA_ONLY")).map(_.getPath)
@@ -724,7 +760,11 @@ trait ParallelTesting extends RunnerOrchestration with CoverageSupport:
       testSource.checkFile.foreach(diffTest(testSource, _, reporterOutputLines(reporters), reporters, logger))
 
     private def reporterOutputLines(reporters: Seq[TestReporter]): List[String] =
-      reporters.flatMap(_.consoleOutput.linesIterator).toList
+      reporters.flatMap { reporter =>
+        compilerOutputOverrides.synchronized {
+          compilerOutputOverrides.get(reporter)
+        }.getOrElse(reporter.consoleOutput.linesIterator.toList)
+      }.toList
 
     private[ParallelTesting] def executeTestSuite(): this.type = {
       assert(testSourcesCompleted == 0, "not allowed to re-use a `CompileRun`")

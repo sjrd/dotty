@@ -1888,8 +1888,45 @@ object Build {
         )
         s.log.info("scala3-compiler-sjs validation test passed")
       },
-      sjsCompilerCompilationTest :=
-        (sjsCompilerTests / Test / testOnly).toTask(" dotty.tools.dotc.ScalaJSCompilationTests").value,
+      sjsCompilerCompilationTest := {
+        val s = streams.value
+        val outputDir = (Compile / fullLinkJS / scalaJSLinkerOutputDirectory).value
+        (Compile / fullLinkJS).value
+
+        val testDir = target.value / "sjs-compiler-compilation-test"
+        val classpathDir = testDir / "classpath"
+        val rtJar = classpathDir / "rt.jar"
+        if (!rtJar.exists()) {
+          s.log.info(s"Extracting java.base from jrt:/ to $rtJar")
+          SjsCompilerBrowserIDE.extractRTJar(rtJar)
+        }
+
+        val compilerMain = outputDir / "main.js"
+        val testClasspath = (sjsCompilerTests / Test / fullClasspath).value.map(_.data)
+        val testJavaOptions = (sjsCompilerTests / Test / javaOptions).value
+        val testForkOptions = (sjsCompilerTests / Test / forkOptions).value
+        val workingDirectory = testForkOptions.workingDirectory.getOrElse((ThisBuild / baseDirectory).value)
+        val command =
+          Seq("java") ++
+            testJavaOptions ++
+            Seq(
+              s"-Ddotty.tests.sjsCompilerMain=${compilerMain.getAbsolutePath}",
+              s"-Ddotty.tests.sjsCompilerNodeFlags=${sjsCompilerNodeFlags.mkString(",")}",
+              s"-Ddotty.tests.sjsCompilerExtraClasspath=${rtJar.getAbsolutePath}",
+              "-cp",
+              testClasspath.map(_.getAbsolutePath).mkString(File.pathSeparator),
+              "org.junit.runner.JUnitCore",
+              "dotty.tools.dotc.ScalaJSCompilationTests",
+            )
+
+        s.log.info("Running this codebase's Scala.js compilation tests with scala3-compiler-sjs")
+        val exit = scala.sys.process.Process(command, workingDirectory).!(scala.sys.process.ProcessLogger(
+          line => s.log.info(line),
+          line => s.log.error(line),
+        ))
+        if (exit != 0)
+          sys.error(s"scala3-compiler-sjs compilation test failed with exit code $exit")
+      },
       sjsCompilerUnitTest := {
         val s = streams.value
         val outputDir = (Compile / fullLinkJS / scalaJSLinkerOutputDirectory).value

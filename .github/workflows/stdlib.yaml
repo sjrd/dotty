@@ -640,6 +640,7 @@ jobs:
         run: npm ci
       - name: scala3-compiler-sjs compilation test
         run: ./project/scripts/sbt "scala3-compiler-sjs/Compile/sjsCompilerCompilationTest"
+      - name: scala3-compiler-sjs validation test
         run: ./project/scripts/sbt "scala3-compiler-sjs/Compile/sjsCompilerValidationTest"
       - name: scala3-compiler-sjs unit test
         run: ./project/scripts/sbt "scala3-compiler-sjs/Compile/sjsCompilerUnitTest"
